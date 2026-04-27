@@ -1,22 +1,26 @@
 import { useState, useEffect, useCallback } from 'react';
 import { db } from '@/db';
-import type { FileDocument, PageAnalysis } from '@/types';
+import type { FileDocument, PageAnalysis, KnowledgeNode, KnowledgeEdge, Workspace } from '@/types';
 import { v4 as uuid } from 'uuid';
 import { Button } from '@/components/ui/button';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Badge } from '@/components/ui/badge';
 import { FileList } from '@/components/FileList';
 import { PdfViewer } from '@/components/PdfViewer';
 import { PageDetailPanel } from '@/components/PageDetailPanel';
 import { WorkspaceChat } from '@/components/WorkspaceChat';
+import { KnowledgeGraphView } from '@/components/KnowledgeGraphView';
 import { extractPagesText, buildLightParsePrompt, parseLightParseResult, createPageAnalysis } from '@/services/pdf';
 import { callLLM } from '@/services/llm';
+import { generateKnowledgeGraph } from '@/services/knowledgeGraph';
 import {
   Upload,
   FileText,
   Loader2,
   MessageSquare,
   X,
+  Network,
+  RefreshCw,
+  XCircle,
+  Info,
 } from 'lucide-react';
 
 interface WorkspaceViewProps {
@@ -29,6 +33,8 @@ interface WorkspaceViewProps {
   onSelectConversation: (id: string | null) => void;
   onOpenWorkspaceChat: () => void;
 }
+
+type MainView = 'file' | 'chat' | 'graph';
 
 export function WorkspaceView({
   workspaceId,
@@ -47,15 +53,41 @@ export function WorkspaceView({
   const [parseProgress, setParseProgress] = useState({ current: 0, total: 0 });
   const [showWorkspaceChat, setShowWorkspaceChat] = useState(false);
 
+  // 知识图谱状态
+  const [mainView, setMainView] = useState<MainView>('file');
+  const [graphNodes, setGraphNodes] = useState<KnowledgeNode[]>([]);
+  const [graphEdges, setGraphEdges] = useState<KnowledgeEdge[]>([]);
+  const [generatingGraph, setGeneratingGraph] = useState(false);
+  const [workspaceName, setWorkspaceName] = useState('');
+  const [selectedNode, setSelectedNode] = useState<KnowledgeNode | null>(null);
+
   // 加载文件列表
   const loadFiles = useCallback(async () => {
     const list = await db.files.where('workspaceId').equals(workspaceId).toArray();
     setFiles(list);
   }, [workspaceId]);
 
+  // 加载工作空间名称
+  useEffect(() => {
+    db.workspaces.get(workspaceId).then((ws) => {
+      if (ws) setWorkspaceName(ws.name);
+    });
+  }, [workspaceId]);
+
   useEffect(() => {
     loadFiles();
   }, [loadFiles]);
+
+  // 加载已保存的知识图谱
+  useEffect(() => {
+    async function loadGraph() {
+      const nodes = await db.knowledgeNodes.where('workspaceId').equals(workspaceId).toArray();
+      const edges = await db.knowledgeEdges.where('workspaceId').equals(workspaceId).toArray();
+      setGraphNodes(nodes);
+      setGraphEdges(edges);
+    }
+    loadGraph();
+  }, [workspaceId]);
 
   // 加载当前文件的解析结果
   useEffect(() => {
@@ -89,32 +121,23 @@ export function WorkspaceView({
         parseStatus: 'pending',
       };
 
-      // 保存文件元数据
       await db.files.add(fileDoc);
-
-      // 保存PDF二进制
       await db.fileBlobs.add({ id: uuid(), fileId: fileDoc.id, blob: file });
-
       await loadFiles();
       onSelectFile(fileDoc.id);
 
-      // 开始解析
       setParsing(true);
       fileDoc.parseStatus = 'parsing';
       await db.files.update(fileDoc.id, { parseStatus: 'parsing' });
 
       try {
-        // 提取页面文本
         const { pageCount, pages } = await extractPagesText(file);
         await db.files.update(fileDoc.id, { pageCount });
-
         setParseProgress({ current: 0, total: pages.length });
 
-        // 获取当前模型配置
         const providers = await db.modelProviders.toArray();
-        const activeProvider = providers[0]; // 使用第一个配置的provider
+        const activeProvider = providers[0];
 
-        // 逐页调用LLM轻量解析
         for (let i = 0; i < pages.length; i++) {
           const page = pages[i];
           setParseProgress({ current: i + 1, total: pages.length });
@@ -136,7 +159,6 @@ export function WorkspaceView({
               keywords = [];
             }
           } else {
-            // 没有API Key或页面无文字，用原始文本做兜底
             summary = page.text.trim() ? page.text.slice(0, 30) + '...' : '（无文字内容）';
           }
 
@@ -154,7 +176,6 @@ export function WorkspaceView({
         await db.files.update(fileDoc.id, { parseStatus: 'done' });
         await loadFiles();
 
-        // 重新加载解析结果
         const analyses = await db.pageAnalyses
           .where('fileId')
           .equals(fileDoc.id)
@@ -169,7 +190,6 @@ export function WorkspaceView({
         setParseProgress({ current: 0, total: 0 });
       }
 
-      // 清空input以允许重复上传同名文件
       e.target.value = '';
     },
     [workspaceId, loadFiles, onSelectFile]
@@ -191,6 +211,88 @@ export function WorkspaceView({
     [currentFileId, onSelectFile, onExpandPage, loadFiles]
   );
 
+  // 生成知识图谱
+  const handleGenerateGraph = useCallback(async () => {
+    const providers = await db.modelProviders.toArray();
+    const activeProvider = providers[0];
+    if (!activeProvider?.apiKey) {
+      alert('请先在设置中配置 API Key');
+      return;
+    }
+
+    setGeneratingGraph(true);
+    try {
+      // 获取该工作空间所有文件的页面分析（带文件名）
+      const allAnalyses = await db.pageAnalyses
+        .where('workspaceId')
+        .equals(workspaceId)
+        .toArray();
+
+      // 为每个分析附加文件名
+      const analysesWithFileName = await Promise.all(
+        allAnalyses.map(async (a) => {
+          const f = await db.files.get(a.fileId);
+          return { ...a, fileName: f?.name ?? '未知文件' };
+        })
+      );
+
+      if (analysesWithFileName.length === 0) {
+        alert('暂无已解析的页面数据，请先上传并解析PDF');
+        setGeneratingGraph(false);
+        return;
+      }
+
+      // 删除旧的知识图谱数据
+      await db.knowledgeNodes.where('workspaceId').equals(workspaceId).delete();
+      await db.knowledgeEdges.where('workspaceId').equals(workspaceId).delete();
+
+      // 生成新的知识图谱
+      const result = await generateKnowledgeGraph(
+        workspaceId,
+        workspaceName,
+        activeProvider,
+        () => Promise.resolve(analysesWithFileName)
+      );
+
+      // 存入数据库
+      for (const node of result.nodes) {
+        await db.knowledgeNodes.add(node);
+      }
+      for (const edge of result.edges) {
+        await db.knowledgeEdges.add(edge);
+      }
+
+      setGraphNodes(result.nodes);
+      setGraphEdges(result.edges);
+      setMainView('graph');
+    } catch (err) {
+      console.error('生成知识图谱失败:', err);
+      alert('生成知识图谱失败: ' + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setGeneratingGraph(false);
+    }
+  }, [workspaceId, workspaceName]);
+
+  // 点击知识图谱节点
+  const handleNodeClick = useCallback(
+    (node: KnowledgeNode) => {
+      setSelectedNode(node);
+    },
+    []
+  );
+
+  // 从知识图谱节点跳转到文件
+  const handleNodeGoToFile = useCallback(
+    (node: KnowledgeNode) => {
+      if (node.sourceFileIds.length > 0) {
+        onSelectFile(node.sourceFileIds[0]);
+        setMainView('file');
+        setSelectedNode(null);
+      }
+    },
+    [onSelectFile]
+  );
+
   return (
     <div className="flex-1 flex overflow-hidden">
       {/* 文件列表面板 */}
@@ -204,11 +306,14 @@ export function WorkspaceView({
         <FileList
           files={files}
           currentFileId={currentFileId}
-          onSelectFile={onSelectFile}
+          onSelectFile={(id) => {
+            onSelectFile(id);
+            setMainView('file');
+          }}
           onDeleteFile={handleDeleteFile}
         />
 
-        {/* 上传按钮 —— 放在底部，更醒目 */}
+        {/* 上传按钮 */}
         <div className="p-2 border-t border-border">
           <label className="cursor-pointer block">
             <input
@@ -229,12 +334,56 @@ export function WorkspaceView({
           </label>
         </div>
 
+        {/* 知识图谱按钮 */}
+        <div className="p-2 border-t border-border">
+          <Button
+            variant="outline"
+            className="w-full justify-start gap-2 text-xs h-8"
+            onClick={handleGenerateGraph}
+            disabled={generatingGraph || parsing}
+          >
+            {generatingGraph ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                生成中...
+              </>
+            ) : graphNodes.length > 0 ? (
+              <>
+                <RefreshCw className="w-3.5 h-3.5" />
+                刷新知识图谱
+              </>
+            ) : (
+              <>
+                <Network className="w-3.5 h-3.5" />
+                生成知识图谱
+              </>
+            )}
+          </Button>
+        </div>
+
+        {/* 查看知识图谱按钮（已有数据时显示） */}
+        {graphNodes.length > 0 && (
+          <div className="px-2 pb-2">
+            <Button
+              variant={mainView === 'graph' ? 'default' : 'outline'}
+              className="w-full justify-start gap-2 text-xs h-8"
+              onClick={() => setMainView('graph')}
+            >
+              <Network className="w-3.5 h-3.5" />
+              查看知识图谱
+            </Button>
+          </div>
+        )}
+
         {/* 工作空间对话入口 */}
         <div className="p-2 border-t border-border">
           <Button
             variant="outline"
             className="w-full justify-start gap-2 text-xs h-8"
-            onClick={() => setShowWorkspaceChat(true)}
+            onClick={() => {
+              setShowWorkspaceChat(true);
+              setMainView('chat');
+            }}
           >
             <MessageSquare className="w-3.5 h-3.5" />
             跨文件问答
@@ -244,7 +393,153 @@ export function WorkspaceView({
 
       {/* 主内容区 */}
       <div className="flex-1 flex overflow-hidden">
-        {currentFile ? (
+        {mainView === 'graph' ? (
+          /* 知识图谱视图 */
+          <div className="flex-1 flex flex-col overflow-hidden">
+            {/* 顶部栏 */}
+            <div className="h-12 flex items-center justify-between px-4 border-b border-border">
+              <div className="flex items-center gap-2">
+                <Network className="w-4 h-4 text-primary" />
+                <span className="text-sm font-medium">
+                  {workspaceName} - 知识图谱
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  ({graphNodes.length}个知识点, {graphEdges.length}条关系)
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs gap-1"
+                  onClick={handleGenerateGraph}
+                  disabled={generatingGraph}
+                >
+                  {generatingGraph ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <RefreshCw className="w-3 h-3" />
+                  )}
+                  {generatingGraph ? '生成中...' : '刷新'}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={() => {
+                    setMainView('file');
+                    setSelectedNode(null);
+                  }}
+                >
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
+            </div>
+
+            {/* 图谱内容区 */}
+            <div className="flex-1 flex overflow-hidden">
+              <KnowledgeGraphView
+                nodes={graphNodes}
+                edges={graphEdges}
+                onNodeClick={handleNodeClick}
+              />
+
+              {/* 右侧节点详情面板 */}
+              {selectedNode && (
+                <div className="w-72 border-l border-border bg-card p-4 space-y-4 overflow-y-auto">
+                  <div className="flex items-start justify-between">
+                    <h3 className="text-sm font-semibold">{selectedNode.label}</h3>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6 shrink-0"
+                      onClick={() => setSelectedNode(null)}
+                    >
+                      <XCircle className="w-4 h-4" />
+                    </Button>
+                  </div>
+
+                  {selectedNode.description && (
+                    <div>
+                      <div className="text-xs text-muted-foreground mb-1">描述</div>
+                      <p className="text-sm">{selectedNode.description}</p>
+                    </div>
+                  )}
+
+                  {selectedNode.sourceFileIds.length > 0 && (
+                    <div>
+                      <div className="text-xs text-muted-foreground mb-1">来源文件</div>
+                      <div className="space-y-1">
+                        {selectedNode.sourceFileIds.map((fileId) => (
+                          <Button
+                            key={fileId}
+                            variant="ghost"
+                            size="sm"
+                            className="w-full justify-start text-xs h-7"
+                            onClick={() => handleNodeGoToFile(selectedNode)}
+                          >
+                            <FileText className="w-3 h-3 mr-1" />
+                            {files.find((f) => f.id === fileId)?.name ?? '未知文件'}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 相关关系 */}
+                  <div>
+                    <div className="text-xs text-muted-foreground mb-1">相关关系</div>
+                    <div className="space-y-1">
+                      {graphEdges
+                        .filter((e) => e.source === selectedNode.id || e.target === selectedNode.id)
+                        .map((edge) => {
+                          const isSource = edge.source === selectedNode.id;
+                          const otherNodeId = isSource ? edge.target : edge.source;
+                          const otherNode = graphNodes.find((n) => n.id === otherNodeId);
+                          return (
+                            <div key={edge.id} className="text-xs flex items-center gap-1">
+                              {isSource ? (
+                                <>
+                                  <span className="text-muted-foreground">→</span>
+                                  <span className="text-primary">{edge.relation}</span>
+                                  <span className="text-muted-foreground">→</span>
+                                </>
+                              ) : (
+                                <>
+                                  <span className="text-muted-foreground">←</span>
+                                  <span className="text-primary">{edge.relation}</span>
+                                  <span className="text-muted-foreground">←</span>
+                                </>
+                              )}
+                              <button
+                                className="hover:text-primary transition-colors"
+                                onClick={() => {
+                                  const node = graphNodes.find((n) => n.id === otherNodeId);
+                                  if (node) setSelectedNode(node);
+                                }}
+                              >
+                                {otherNode?.label ?? '未知'}
+                              </button>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        ) : showWorkspaceChat || mainView === 'chat' ? (
+          <WorkspaceChat
+            workspaceId={workspaceId}
+            onClose={() => {
+              setShowWorkspaceChat(false);
+              setMainView('file');
+            }}
+            currentConversationId={currentConversationId}
+            onSelectConversation={onSelectConversation}
+          />
+        ) : currentFile ? (
           <>
             {/* PDF预览区 */}
             <div className="flex-1 flex flex-col overflow-hidden">
@@ -253,17 +548,16 @@ export function WorkspaceView({
                 <div className="flex items-center gap-2">
                   <FileText className="w-4 h-4 text-muted-foreground" />
                   <span className="text-sm font-medium truncate">{currentFile.name}</span>
-                  <Badge
-                    variant={
+                  <span
+                    className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
                       currentFile.parseStatus === 'done'
-                        ? 'default'
+                        ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
                         : currentFile.parseStatus === 'parsing'
-                          ? 'secondary'
+                          ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400'
                           : currentFile.parseStatus === 'error'
-                            ? 'destructive'
-                            : 'outline'
-                    }
-                    className="text-[10px]"
+                            ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+                            : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'
+                    }`}
                   >
                     {currentFile.parseStatus === 'done'
                       ? '已解析'
@@ -272,7 +566,7 @@ export function WorkspaceView({
                         : currentFile.parseStatus === 'error'
                           ? '解析失败'
                           : '待解析'}
-                  </Badge>
+                  </span>
                 </div>
                 <Button
                   variant="ghost"
@@ -317,13 +611,6 @@ export function WorkspaceView({
               />
             )}
           </>
-        ) : showWorkspaceChat ? (
-          <WorkspaceChat
-            workspaceId={workspaceId}
-            onClose={() => setShowWorkspaceChat(false)}
-            currentConversationId={currentConversationId}
-            onSelectConversation={onSelectConversation}
-          />
         ) : (
           /* 未选择文件时 */
           <div className="flex-1 flex items-center justify-center">
@@ -335,6 +622,16 @@ export function WorkspaceView({
                   系统会自动解析每页知识点，点击即可深入讲解
                 </p>
               </div>
+              {graphNodes.length > 0 && (
+                <Button
+                  variant="outline"
+                  className="gap-2"
+                  onClick={() => setMainView('graph')}
+                >
+                  <Network className="w-4 h-4" />
+                  查看知识图谱
+                </Button>
+              )}
             </div>
           </div>
         )}

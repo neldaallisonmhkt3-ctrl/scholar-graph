@@ -68,6 +68,39 @@ export interface ModelProvider {
   defaultModel: string;
 }
 
+// ========== 知识图谱 ==========
+export interface KnowledgeNode {
+  id: string;
+  workspaceId: string;
+  /** 知识点名称 */
+  label: string;
+  /** 所属文件ID列表 */
+  sourceFileIds: string[];
+  /** 出现的页码（格式：fileId:pageNumber） */
+  pageReferences: string[];
+  /** LLM生成的一句话描述 */
+  description: string;
+}
+
+export interface KnowledgeEdge {
+  id: string;
+  workspaceId: string;
+  /** 起始节点ID */
+  source: string;
+  /** 目标节点ID */
+  target: string;
+  /** 关系描述，如"包含"、"依赖于"、"推导出" */
+  relation: string;
+}
+
+export interface KnowledgeGraph {
+  nodes: KnowledgeNode[];
+  edges: KnowledgeEdge[];
+  /** 生成时的文件ID快照，用于判断是否需要刷新 */
+  fileSnapshot: string[];
+  createdAt: number;
+}
+
 // ========== 应用状态 ==========
 export type AppView = 'workspace' | 'settings';
 
