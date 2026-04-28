@@ -144,10 +144,16 @@ export function WorkspaceView({
   // 加载已保存的知识图谱
   useEffect(() => {
     async function loadGraph() {
-      const nodes = await db.knowledgeNodes.where('workspaceId').equals(workspaceId).toArray();
-      const edges = await db.knowledgeEdges.where('workspaceId').equals(workspaceId).toArray();
-      setGraphNodes(nodes);
-      setGraphEdges(edges);
+      try {
+        const nodes = await db.knowledgeNodes.where('workspaceId').equals(workspaceId).toArray();
+        const edges = await db.knowledgeEdges.where('workspaceId').equals(workspaceId).toArray();
+        setGraphNodes(nodes);
+        setGraphEdges(edges);
+      } catch (err) {
+        console.error('[Graph] 加载知识图谱失败:', err);
+        setGraphNodes([]);
+        setGraphEdges([]);
+      }
     }
     loadGraph();
   }, [workspaceId]);
@@ -183,15 +189,21 @@ export function WorkspaceView({
 
   // 加载薄弱知识点数据
   const loadWeakNodes = useCallback(async () => {
-    const masteries = await getWeakNodes(workspaceId);
-    const weakIds = new Set(masteries.map((m) => m.nodeId));
-    setWeakNodeIds(weakIds);
+    try {
+      const masteries = await getWeakNodes(workspaceId);
+      const weakIds = new Set(masteries.map((m) => m.nodeId));
+      setWeakNodeIds(weakIds);
 
-    if (weakIds.size > 0 && graphNodes.length > 0) {
-      const allMasteryData = await getAllMastery(workspaceId);
-      const paths = computeLearningPathsV2(graphNodes, graphEdges, weakIds, allMasteryData);
-      setLearningPaths(paths);
-    } else {
+      if (weakIds.size > 0 && graphNodes.length > 0) {
+        const allMasteryData = await getAllMastery(workspaceId);
+        const paths = computeLearningPathsV2(graphNodes, graphEdges, weakIds, allMasteryData);
+        setLearningPaths(paths);
+      } else {
+        setLearningPaths([]);
+      }
+    } catch (err) {
+      console.error('[Mastery] 加载薄弱知识点数据失败:', err);
+      setWeakNodeIds(new Set());
       setLearningPaths([]);
     }
   }, [workspaceId, graphNodes, graphEdges]);
