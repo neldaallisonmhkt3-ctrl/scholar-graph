@@ -18,8 +18,10 @@ interface ScholarGraphDB extends Dexie {
 
 const DB_NAME = 'ScholarGraphDB';
 
-/** 配置所有版本的 stores 声明 */
-function configureVersions(db: Dexie) {
+/** 创建并配置数据库 */
+function createDatabase(): ScholarGraphDB {
+  const db = new Dexie(DB_NAME) as ScholarGraphDB;
+
   // 必须保留所有历史版本声明，否则已有旧版数据库的浏览器会报 VersionError
   db.version(3).stores({
     workspaces: 'id, name, createdAt, updatedAt',
@@ -38,10 +40,12 @@ function configureVersions(db: Dexie) {
   db.version(4).stores({
     nodeMasteries: 'id, workspaceId, nodeId, masteryLevel',
   });
+
+  return db;
 }
 
-const db = new Dexie(DB_NAME) as ScholarGraphDB;
-configureVersions(db);
+// 创建数据库实例
+let db = createDatabase();
 
 // 启动时尝试打开，如果版本升级导致损坏则自动删除重建
 db.open().catch(async (err) => {
@@ -49,8 +53,8 @@ db.open().catch(async (err) => {
   db.close();
   try {
     await Dexie.delete(DB_NAME);
-    // 重新配置并打开
-    configureVersions(db);
+    // 重新创建数据库实例（不能用旧的，因为版本声明已绑定）
+    db = createDatabase();
     await db.open();
     console.info('[DB] 数据库重建成功');
   } catch (retryErr) {
