@@ -1,5 +1,5 @@
 import Dexie from 'dexie';
-import type { Workspace, FileDocument, PageAnalysis, Conversation, ModelProvider, KnowledgeNode, KnowledgeEdge, Quiz, QuizQuestion } from '@/types';
+import type { Workspace, FileDocument, PageAnalysis, Conversation, ModelProvider, KnowledgeNode, KnowledgeEdge, Quiz, QuizQuestion, NodeMastery } from '@/types';
 
 // Dexie v4 使用 Table 类型，不用 EntityTable（那是v4的高级类型，可能有兼容性问题）
 interface ScholarGraphDB extends Dexie {
@@ -13,10 +13,12 @@ interface ScholarGraphDB extends Dexie {
   knowledgeEdges: Dexie.Table<KnowledgeEdge, string>;
   quizzes: Dexie.Table<Quiz, string>;
   quizQuestions: Dexie.Table<QuizQuestion, string>;
+  nodeMasteries: Dexie.Table<NodeMastery, string>;
 }
 
 const db = new Dexie('ScholarGraphDB') as ScholarGraphDB;
 
+// 必须保留所有历史版本声明，否则已有旧版数据库的浏览器会报 VersionError
 db.version(3).stores({
   workspaces: 'id, name, createdAt, updatedAt',
   files: 'id, workspaceId, name, uploadedAt, parseStatus',
@@ -28,6 +30,11 @@ db.version(3).stores({
   knowledgeEdges: 'id, workspaceId, source, target',
   quizzes: 'id, fileId, workspaceId, createdAt',
   quizQuestions: 'id, quizId',
+});
+
+// v4: 新增 nodeMasteries 表（Quiz薄弱点→知识图谱掌握度）
+db.version(4).stores({
+  nodeMasteries: 'id, workspaceId, nodeId, masteryLevel',
 });
 
 export { db };
