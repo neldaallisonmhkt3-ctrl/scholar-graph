@@ -554,6 +554,11 @@ export function WorkspaceView({
               )}
             </div>
             <div className="flex items-center gap-2 shrink-0">
+              {weakNodeIds.size === 0 && (
+                <span className="text-[10px] text-muted-foreground hidden sm:inline">
+                  完成测验后可查看学习路径
+                </span>
+              )}
               <Button
                 variant={showLearningPath ? 'default' : 'outline'}
                 size="sm"
