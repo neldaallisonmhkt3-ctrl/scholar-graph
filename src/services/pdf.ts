@@ -40,22 +40,78 @@ export async function renderPageToCanvas(
   pageNumber: number,
   container: HTMLDivElement,
   scale = 1.5
-): Promise<void> {
+): Promise<HTMLCanvasElement> {
   const lib = await getPdfjs();
   const arrayBuffer = await fileBlob.arrayBuffer();
   const pdf = await lib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
   const page = await pdf.getPage(pageNumber);
-  const viewport = page.getViewport({ scale });
+  const viewport = page.getViewport({ scale, rotation: 0 });
 
   const canvas = document.createElement('canvas');
   canvas.width = viewport.width;
   canvas.height = viewport.height;
   canvas.className = 'pdf-page-canvas';
+  canvas.style.width = '100%';
+  canvas.style.height = 'auto';
+  canvas.style.display = 'block';
   const ctx = canvas.getContext('2d')!;
 
   container.innerHTML = '';
   container.appendChild(canvas);
   await page.render({ canvasContext: ctx, viewport }).promise;
+  return canvas;
+}
+
+/** 渲染单页到指定 canvas（不创建新元素） */
+export async function renderPageToExistingCanvas(
+  fileBlob: Blob,
+  pageNumber: number,
+  canvas: HTMLCanvasElement,
+  scale = 1.5
+): Promise<void> {
+  const lib = await getPdfjs();
+  const arrayBuffer = await fileBlob.arrayBuffer();
+  const pdf = await lib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
+  const page = await pdf.getPage(pageNumber);
+  const viewport = page.getViewport({ scale, rotation: 0 });
+
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  const ctx = canvas.getContext('2d')!;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  await page.render({ canvasContext: ctx, viewport }).promise;
+}
+
+/** 渲染PDF页面为图片Blob URL（离屏canvas，不依赖DOM） */
+export async function renderPageToBlobUrl(
+  fileBlob: Blob,
+  pageNumber: number,
+  scale = 1.5
+): Promise<string> {
+  const lib = await getPdfjs();
+  const arrayBuffer = await fileBlob.arrayBuffer();
+  const pdf = await lib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
+  const page = await pdf.getPage(pageNumber);
+
+  // 不指定 rotation，使用页面默认旋转
+  const viewport = page.getViewport({ scale });
+
+  const canvas = document.createElement('canvas');
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  const ctx = canvas.getContext('2d')!;
+
+  // 先填充白色背景（PNG透明底变白）
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  await page.render({ canvasContext: ctx, viewport }).promise;
+
+  // canvas → Blob → Object URL
+  const blob = await new Promise<Blob>((resolve) => {
+    canvas.toBlob((b) => resolve(b!), 'image/png');
+  });
+  return URL.createObjectURL(blob);
 }
 
 /** 构建轻量解析的Prompt */

@@ -1,35 +1,54 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import * as d3 from 'd3';
-import type { KnowledgeNode, KnowledgeEdge } from '@/types';
+import type { KnowledgeNode, KnowledgeEdge, FileDocument } from '@/types';
+import { X, FileText, ArrowRight, ArrowLeft, Link2, Hash, BookOpen, Layers, ChevronRight, Sparkles } from 'lucide-react';
 
 interface KnowledgeGraphViewProps {
   nodes: KnowledgeNode[];
   edges: KnowledgeEdge[];
   onNodeClick?: (node: KnowledgeNode) => void;
+  selectedNode?: KnowledgeNode | null;
+  onNavigateToNode?: (node: KnowledgeNode | null) => void;
+  onGoToFile?: (node: KnowledgeNode) => void;
+  files?: FileDocument[];
 }
 
-/** 关系类型对应的颜色 */
+/** 关系类型对应的颜色 - 更鲜艳、更有区分度 */
 const RELATION_COLORS: Record<string, string> = {
-  包含: '#3b82f6',
-  依赖于: '#f59e0b',
-  推导出: '#10b981',
-  对比: '#ef4444',
-  应用: '#8b5cf6',
-  前置知识: '#06b6d4',
+  包含: '#6366f1',     // indigo
+  依赖于: '#f59e0b',   // amber
+  推导出: '#10b981',   // emerald
+  对比: '#f43f5e',     // rose
+  应用: '#8b5cf6',     // violet
+  前置知识: '#06b6d4', // cyan
 };
 
-/** 节点连接数对应的颜色深浅 */
-function getNodeColor(d: SimNode, isDark: boolean) {
+/** 节点层级颜色 - 核心用紫/蓝渐变，中等用蓝，外围用蓝灰 */
+const NODE_PALETTE = {
+  light: {
+    core: { fill: '#6366f1', stroke: '#4f46e5', glow: 'rgba(99,102,241,0.35)' },
+    medium: { fill: '#3b82f6', stroke: '#2563eb', glow: 'rgba(59,130,246,0.25)' },
+    normal: { fill: '#94a3b8', stroke: '#64748b', glow: 'none' },
+  },
+  dark: {
+    core: { fill: '#818cf8', stroke: '#6366f1', glow: 'rgba(129,140,248,0.4)' },
+    medium: { fill: '#60a5fa', stroke: '#3b82f6', glow: 'rgba(96,165,250,0.3)' },
+    normal: { fill: '#64748b', stroke: '#475569', glow: 'none' },
+  },
+};
+
+/** 根据连接数返回节点视觉参数 */
+function getNodeStyle(d: SimNode, isDark: boolean) {
   const connCount = (d.sourceLinks?.length ?? 0) + (d.targetLinks?.length ?? 0);
-  if (isDark) {
-    if (connCount >= 5) return '#818cf8'; // 高连接：亮紫
-    if (connCount >= 3) return '#60a5fa'; // 中连接：亮蓝
-    return '#94a3b8'; // 低连接：灰蓝
-  } else {
-    if (connCount >= 5) return '#4f46e5';
-    if (connCount >= 3) return '#2563eb';
-    return '#64748b';
+  const palette = isDark ? NODE_PALETTE.dark : NODE_PALETTE.light;
+
+  if (connCount >= 5) {
+    return { ...palette.core, r: 22, fontSize: 12, fontWeight: 700 };
   }
+  if (connCount >= 3) {
+    return { ...palette.medium, r: 16, fontSize: 11, fontWeight: 600 };
+  }
+  return { ...palette.normal, r: 12, fontSize: 10, fontWeight: 500 };
 }
 
 interface SimNode extends d3.SimulationNodeDatum {
@@ -46,7 +65,15 @@ interface SimLink extends d3.SimulationLinkDatum<SimNode> {
   relation: string;
 }
 
-export function KnowledgeGraphView({ nodes, edges, onNodeClick }: KnowledgeGraphViewProps) {
+export function KnowledgeGraphView({
+  nodes,
+  edges,
+  onNodeClick,
+  selectedNode,
+  onNavigateToNode,
+  onGoToFile,
+  files = [],
+}: KnowledgeGraphViewProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -56,12 +83,12 @@ export function KnowledgeGraphView({ nodes, edges, onNodeClick }: KnowledgeGraph
     const container = containerRef.current;
     const width = container.clientWidth;
     const height = container.clientHeight;
-
-    // 检测暗色模式
     const isDark = document.documentElement.classList.contains('dark');
 
     // 清空旧图
     d3.select(svgRef.current).selectAll('*').remove();
+    // 清除旧 tooltip
+    d3.select(container).selectAll('.graph-tooltip').remove();
 
     const svg = d3
       .select(svgRef.current)
@@ -84,7 +111,14 @@ export function KnowledgeGraphView({ nodes, edges, onNodeClick }: KnowledgeGraph
       relation: e.relation,
     }));
 
-    // 创建力仿真
+    // 计算每个节点的连接数（用于碰撞半径）
+    const connCountMap = new Map<string, number>();
+    edges.forEach(e => {
+      connCountMap.set(e.source, (connCountMap.get(e.source) ?? 0) + 1);
+      connCountMap.set(e.target, (connCountMap.get(e.target) ?? 0) + 1);
+    });
+
+    // 创建力仿真 - 更大的间距
     const simulation = d3
       .forceSimulation(simNodes)
       .force(
@@ -92,11 +126,16 @@ export function KnowledgeGraphView({ nodes, edges, onNodeClick }: KnowledgeGraph
         d3
           .forceLink<SimNode, SimLink>(simLinks)
           .id((d) => d.id)
-          .distance(120)
+          .distance(160)
       )
-      .force('charge', d3.forceManyBody().strength(-400))
+      .force('charge', d3.forceManyBody().strength(-600))
       .force('center', d3.forceCenter(width / 2, height / 2))
-      .force('collision', d3.forceCollide().radius(50));
+      .force('collision', d3.forceCollide<SimNode>().radius((d) => {
+        const conn = connCountMap.get(d.id) ?? 0;
+        return conn >= 5 ? 60 : conn >= 3 ? 46 : 36;
+      }).strength(0.8))
+      .force('x', d3.forceX(width / 2).strength(0.04))
+      .force('y', d3.forceY(height / 2).strength(0.04));
 
     // 添加缩放
     const g = svg.append('g');
@@ -104,60 +143,107 @@ export function KnowledgeGraphView({ nodes, edges, onNodeClick }: KnowledgeGraph
     svg.call(
       d3
         .zoom<SVGSVGElement, unknown>()
-        .scaleExtent([0.3, 4])
+        .scaleExtent([0.2, 5])
         .on('zoom', (event) => {
           g.attr('transform', event.transform);
         }) as unknown as (selection: d3.Selection<SVGSVGElement, unknown, null, undefined>) => void
     );
 
-    // 绘制箭头标记
+    // ====== defs: 渐变、阴影、箭头、动画 ======
     const defs = svg.append('defs');
+
+    // 选中节点外圈发光 filter
+    const selectedGlowFilter = defs.append('filter')
+      .attr('id', 'selected-glow')
+      .attr('x', '-50%').attr('y', '-50%')
+      .attr('width', '200%').attr('height', '200%');
+    selectedGlowFilter.append('feGaussianBlur')
+      .attr('in', 'SourceGraphic')
+      .attr('stdDeviation', 4)
+      .attr('result', 'blur');
+    const selectedMerge = selectedGlowFilter.append('feMerge');
+    selectedMerge.append('feMergeNode').attr('in', 'blur');
+    selectedMerge.append('feMergeNode').attr('in', 'SourceGraphic');
+
+    // 节点阴影
+    const shadowFilter = defs.append('filter').attr('id', 'node-shadow');
+    shadowFilter.append('feDropShadow')
+      .attr('dx', 0).attr('dy', 2).attr('stdDeviation', 4)
+      .attr('flood-color', isDark ? 'rgba(0,0,0,0.4)' : 'rgba(0,0,0,0.12)')
+      .attr('flood-opacity', 1);
+
+    // 核心节点光晕
+    const glowFilter = defs.append('filter').attr('id', 'core-glow');
+    glowFilter.append('feGaussianBlur').attr('stdDeviation', 6).attr('result', 'blur');
+    glowFilter.append('feComposite').attr('in', 'SourceGraphic').attr('in2', 'blur').attr('operator', 'over');
+
+    // 箭头标记 - 更精致
     const relationTypes = [...new Set(edges.map((e) => e.relation))];
     for (const rel of relationTypes) {
       const color = RELATION_COLORS[rel] || '#64748b';
       defs
         .append('marker')
         .attr('id', `arrow-${rel}`)
-        .attr('viewBox', '0 -5 10 10')
-        .attr('refX', 28)
+        .attr('viewBox', '0 -4 8 8')
+        .attr('refX', 30)
         .attr('refY', 0)
-        .attr('markerWidth', 6)
-        .attr('markerHeight', 6)
+        .attr('markerWidth', 5)
+        .attr('markerHeight', 5)
         .attr('orient', 'auto')
         .append('path')
         .attr('fill', color)
-        .attr('d', 'M0,-5L10,0L0,5');
+        .attr('fill-opacity', 0.7)
+        .attr('d', 'M0,-3.5L7,0L0,3.5Z');
     }
 
-    // 绘制边
-    const link = g
+    // ====== 绘制边 - 使用曲线路径 ======
+    const linkPath = g
       .append('g')
-      .selectAll('line')
+      .selectAll('path')
       .data(simLinks)
-      .join('line')
+      .join('path')
+      .attr('class', 'graph-link')
+      .attr('fill', 'none')
       .attr('stroke', (d) => RELATION_COLORS[d.relation] || '#64748b')
-      .attr('stroke-opacity', 0.6)
-      .attr('stroke-width', 1.5)
+      .attr('stroke-opacity', 0.3)
+      .attr('stroke-width', 1.2)
       .attr('marker-end', (d) => `url(#arrow-${d.relation})`);
 
-    // 边上的关系标签
-    const linkLabel = g
+    // 边上的关系标签 - 加背景
+    const linkLabelGroup = g
       .append('g')
-      .selectAll('text')
+      .selectAll('g')
       .data(simLinks)
-      .join('text')
-      .attr('fill', isDark ? '#9ca3af' : '#6b7280')
-      .attr('font-size', '9px')
+      .join('g')
+      .attr('class', 'graph-link-label');
+
+    // 标签背景
+    linkLabelGroup
+      .append('rect')
+      .attr('class', 'graph-link-label-bg')
+      .attr('rx', 3)
+      .attr('ry', 3)
+      .attr('fill', isDark ? '#1e293b' : '#f8fafc')
+      .attr('fill-opacity', 0.85);
+
+    // 标签文字
+    linkLabelGroup
+      .append('text')
+      .attr('class', 'graph-link-label-text')
       .attr('text-anchor', 'middle')
-      .attr('dy', -6)
+      .attr('dy', '0.35em')
+      .attr('fill', isDark ? '#94a3b8' : '#64748b')
+      .attr('font-size', '9px')
+      .attr('font-weight', 500)
       .text((d) => d.relation);
 
-    // 绘制节点组
+    // ====== 绘制节点组 ======
     const nodeGroup = g
       .append('g')
       .selectAll('g')
       .data(simNodes)
       .join('g')
+      .attr('class', 'graph-node')
       .style('cursor', 'pointer')
       .call(
         d3
@@ -178,99 +264,241 @@ export function KnowledgeGraphView({ nodes, edges, onNodeClick }: KnowledgeGraph
           }) as unknown as (selection: d3.Selection<SVGGElement, SimNode, SVGGElement, unknown>) => void
       );
 
+    // 节点外发光（仅核心/重要节点）
+    nodeGroup
+      .filter((d) => {
+        const conn = (d.sourceLinks?.length ?? 0) + (d.targetLinks?.length ?? 0);
+        return conn >= 3;
+      })
+      .append('circle')
+      .attr('class', 'graph-node-glow')
+      .attr('r', (d) => getNodeStyle(d, isDark).r + 10)
+      .attr('fill', (d) => getNodeStyle(d, isDark).glow)
+      .attr('fill-opacity', 0.5)
+      .attr('stroke', 'none');
+
+    // 选中脉冲光环 1（默认隐藏，用 SVG animate 实现脉冲）
+    nodeGroup
+      .append('circle')
+      .attr('class', 'graph-node-selected-ring')
+      .attr('r', (d) => getNodeStyle(d, isDark).r + 2)
+      .attr('fill', 'none')
+      .attr('stroke', isDark ? '#818cf8' : '#6366f1')
+      .attr('stroke-width', 2.5)
+      .attr('opacity', 0)
+      .style('display', 'none')
+      .each(function (d) {
+        const baseR = getNodeStyle(d, isDark).r + 2;
+        d3.select(this).append('animate')
+          .attr('attributeName', 'r')
+          .attr('from', baseR)
+          .attr('to', baseR + 16)
+          .attr('dur', '1.5s')
+          .attr('repeatCount', 'indefinite');
+        d3.select(this).append('animate')
+          .attr('attributeName', 'opacity')
+          .attr('values', '0.7;0')
+          .attr('dur', '1.5s')
+          .attr('repeatCount', 'indefinite');
+      });
+
+    // 选中脉冲光环 2（延迟脉冲）
+    nodeGroup
+      .append('circle')
+      .attr('class', 'graph-node-selected-ring-2')
+      .attr('r', (d) => getNodeStyle(d, isDark).r + 2)
+      .attr('fill', 'none')
+      .attr('stroke', isDark ? '#a5b4fc' : '#818cf8')
+      .attr('stroke-width', 1.5)
+      .attr('opacity', 0)
+      .style('display', 'none')
+      .each(function (d) {
+        const baseR = getNodeStyle(d, isDark).r + 2;
+        d3.select(this).append('animate')
+          .attr('attributeName', 'r')
+          .attr('from', baseR)
+          .attr('to', baseR + 14)
+          .attr('dur', '1.5s')
+          .attr('begin', '0.5s')
+          .attr('repeatCount', 'indefinite');
+        d3.select(this).append('animate')
+          .attr('attributeName', 'opacity')
+          .attr('values', '0.5;0')
+          .attr('dur', '1.5s')
+          .attr('begin', '0.5s')
+          .attr('repeatCount', 'indefinite');
+      });
+
     // 节点圆形
     nodeGroup
       .append('circle')
-      .attr('r', 20)
-      .attr('fill', (d) => getNodeColor(d, isDark))
-      .attr('fill-opacity', 0.85)
-      .attr('stroke', isDark ? '#4b5563' : '#e5e7eb')
-      .attr('stroke-width', 2)
-      .on('mouseover', function () {
-        d3.select(this)
-          .transition()
-          .duration(200)
-          .attr('r', 24)
-          .attr('stroke-width', 3)
-          .attr('stroke', isDark ? '#818cf8' : '#3b82f6');
+      .attr('class', 'graph-node-circle')
+      .attr('r', (d) => getNodeStyle(d, isDark).r)
+      .attr('fill', (d) => getNodeStyle(d, isDark).fill)
+      .attr('fill-opacity', 0.9)
+      .attr('stroke', (d) => getNodeStyle(d, isDark).stroke)
+      .attr('stroke-width', (d) => {
+        const conn = (d.sourceLinks?.length ?? 0) + (d.targetLinks?.length ?? 0);
+        return conn >= 5 ? 2.5 : conn >= 3 ? 2 : 1.5;
       })
-      .on('mouseout', function () {
-        d3.select(this)
-          .transition()
-          .duration(200)
-          .attr('r', 20)
-          .attr('stroke-width', 2)
-          .attr('stroke', isDark ? '#4b5563' : '#e5e7eb');
+      .attr('filter', (d) => {
+        const conn = (d.sourceLinks?.length ?? 0) + (d.targetLinks?.length ?? 0);
+        return conn >= 3 ? 'url(#node-shadow)' : 'none';
       })
       .on('click', (_event, d) => {
         onNodeClick?.(nodes.find((n) => n.id === d.id)!);
       });
 
-    // 节点标签
+    // 节点标签 - 更好的排版
     nodeGroup
       .append('text')
-      .attr('dy', 32)
+      .attr('class', 'graph-node-text')
+      .attr('dy', (d) => getNodeStyle(d, isDark).r + 14)
       .attr('text-anchor', 'middle')
-      .attr('fill', isDark ? '#e5e7eb' : '#1f2937')
-      .attr('font-size', '11px')
-      .attr('font-weight', 500)
+      .attr('fill', isDark ? '#e2e8f0' : '#1e293b')
+      .attr('font-size', (d) => `${getNodeStyle(d, isDark).fontSize}px`)
+      .attr('font-weight', (d) => getNodeStyle(d, isDark).fontWeight)
       .text((d) => d.label)
       .each(function (d) {
-        // 标签过长时截断
         const textEl = this as SVGTextElement;
-        if (textEl.getComputedTextLength() > 60) {
+        const maxW = getNodeStyle(d, isDark).r >= 20 ? 80 : 56;
+        if (textEl.getComputedTextLength() > maxW) {
           let truncated = d.label;
-          while (textEl.getComputedTextLength() > 60 && truncated.length > 2) {
+          while (textEl.getComputedTextLength() > maxW && truncated.length > 2) {
             truncated = truncated.slice(0, -1);
             textEl.textContent = truncated + '…';
           }
         }
       });
 
-    // 节点tooltip（悬停显示描述）
+    // ====== 悬停高亮 + tooltip ======
     const tooltip = d3
       .select(container)
       .append('div')
+      .attr('class', 'graph-tooltip')
       .style('position', 'absolute')
-      .style('padding', '6px 10px')
-      .style('background', isDark ? '#1f2937' : '#ffffff')
-      .style('border', `1px solid ${isDark ? '#374151' : '#e5e7eb'}`)
-      .style('border-radius', '6px')
+      .style('padding', '8px 12px')
+      .style('background', isDark ? '#1e293b' : '#ffffff')
+      .style('border', `1px solid ${isDark ? '#334155' : '#e2e8f0'}`)
+      .style('border-radius', '8px')
       .style('font-size', '12px')
-      .style('color', isDark ? '#e5e7eb' : '#1f2937')
+      .style('color', isDark ? '#e2e8f0' : '#1e293b')
       .style('pointer-events', 'none')
       .style('opacity', 0)
-      .style('max-width', '200px')
+      .style('max-width', '220px')
       .style('z-index', 50)
-      .style('box-shadow', '0 2px 8px rgba(0,0,0,0.15)');
+      .style('box-shadow', isDark ? '0 4px 16px rgba(0,0,0,0.4)' : '0 4px 16px rgba(0,0,0,0.1)');
 
+    // 悬停时高亮当前节点和相关连接
     nodeGroup
       .on('mouseover', (event, d) => {
-        tooltip
-          .style('opacity', 1)
-          .html(`<strong>${d.label}</strong><br/>${d.description || '暂无描述'}`);
+        const hoveredId = d.id;
+        const connectedIds = new Set<string>([hoveredId]);
+        simLinks.forEach((l) => {
+          const sId = typeof l.source === 'string' ? l.source : (l.source as SimNode).id;
+          const tId = typeof l.target === 'string' ? l.target : (l.target as SimNode).id;
+          if (sId === hoveredId) connectedIds.add(tId);
+          if (tId === hoveredId) connectedIds.add(sId);
+        });
+
+        // 边：高亮相关
+        linkPath.attr('stroke-opacity', function () {
+          const ld = d3.select(this).datum() as SimLink | undefined;
+          if (!ld) return 0.3;
+          const sId = typeof ld.source === 'string' ? ld.source : (ld.source as SimNode).id;
+          const tId = typeof ld.target === 'string' ? ld.target : (ld.target as SimNode).id;
+          return (sId === hoveredId || tId === hoveredId) ? 0.7 : 0.06;
+        }).attr('stroke-width', function () {
+          const ld = d3.select(this).datum() as SimLink | undefined;
+          if (!ld) return 1.2;
+          const sId = typeof ld.source === 'string' ? ld.source : (ld.source as SimNode).id;
+          const tId = typeof ld.target === 'string' ? ld.target : (ld.target as SimNode).id;
+          return (sId === hoveredId || tId === hoveredId) ? 2 : 1;
+        });
+
+        // 标签
+        linkLabelGroup.select('.graph-link-label-bg').attr('fill-opacity', function () {
+          const ld = d3.select(this.parentNode as Element).datum() as SimLink | undefined;
+          if (!ld) return 0.85;
+          const sId = typeof ld.source === 'string' ? ld.source : (ld.source as SimNode).id;
+          const tId = typeof ld.target === 'string' ? ld.target : (ld.target as SimNode).id;
+          return (sId === hoveredId || tId === hoveredId) ? 0.9 : 0.1;
+        });
+        linkLabelGroup.select('.graph-link-label-text').attr('opacity', function () {
+          const ld = d3.select(this.parentNode as Element).datum() as SimLink | undefined;
+          if (!ld) return 1;
+          const sId = typeof ld.source === 'string' ? ld.source : (ld.source as SimNode).id;
+          const tId = typeof ld.target === 'string' ? ld.target : (ld.target as SimNode).id;
+          return (sId === hoveredId || tId === hoveredId) ? 1 : 0.08;
+        });
+
+        // 节点
+        nodeGroup.select('.graph-node-circle')
+          .attr('fill-opacity', (nd: SimNode) => connectedIds.has(nd.id) ? 1 : 0.12)
+          .attr('stroke-opacity', (nd: SimNode) => connectedIds.has(nd.id) ? 1 : 0.1);
+        nodeGroup.select('.graph-node-glow')
+          .attr('fill-opacity', (nd: SimNode) => connectedIds.has(nd.id) ? 0.6 : 0.03);
+        nodeGroup.select('.graph-node-text')
+          .attr('opacity', (nd: SimNode) => connectedIds.has(nd.id) ? 1 : 0.1);
+
+        // tooltip
+        tooltip.style('opacity', 1)
+          .html(`<strong style="font-size:13px">${d.label}</strong>${d.description ? `<br/><span style="color:${isDark ? '#94a3b8' : '#64748b'};font-size:11px">${d.description}</span>` : ''}`);
       })
       .on('mousemove', (event) => {
         const rect = container.getBoundingClientRect();
         tooltip
-          .style('left', `${event.clientX - rect.left + 12}px`)
-          .style('top', `${event.clientY - rect.top - 10}px`);
+          .style('left', `${event.clientX - rect.left + 14}px`)
+          .style('top', `${event.clientY - rect.top - 14}px`);
       })
       .on('mouseout', () => {
         tooltip.style('opacity', 0);
+        // 恢复默认状态（如果没选中节点）
+        if (!selectedNode) {
+          linkPath.attr('stroke-opacity', 0.3).attr('stroke-width', 1.2);
+          linkLabelGroup.select('.graph-link-label-bg').attr('fill-opacity', 0.85);
+          linkLabelGroup.select('.graph-link-label-text').attr('opacity', 1);
+          nodeGroup.select('.graph-node-circle').attr('fill-opacity', 0.9).attr('stroke-opacity', 1);
+          nodeGroup.select('.graph-node-glow').attr('fill-opacity', 0.5);
+          nodeGroup.select('.graph-node-text').attr('opacity', 1);
+        }
       });
 
-    // 仿真tick更新位置
+    // ====== 仿真 tick 更新位置 ======
     simulation.on('tick', () => {
-      link
-        .attr('x1', (d) => (d.source as SimNode).x ?? 0)
-        .attr('y1', (d) => (d.source as SimNode).y ?? 0)
-        .attr('x2', (d) => (d.target as SimNode).x ?? 0)
-        .attr('y2', (d) => (d.target as SimNode).y ?? 0);
+      // 更新曲线路径
+      linkPath.attr('d', (d) => {
+        const sx = (d.source as SimNode).x ?? 0;
+        const sy = (d.source as SimNode).y ?? 0;
+        const tx = (d.target as SimNode).x ?? 0;
+        const ty = (d.target as SimNode).y ?? 0;
+        // 轻微弧线：向右偏移控制点
+        const dx = tx - sx;
+        const dy = ty - sy;
+        const dr = Math.sqrt(dx * dx + dy * dy) * 4;
+        return `M${sx},${sy}A${dr},${dr} 0 0,1 ${tx},${ty}`;
+      });
 
-      linkLabel
-        .attr('x', (d) => (((d.source as SimNode).x ?? 0) + ((d.target as SimNode).x ?? 0)) / 2)
-        .attr('y', (d) => (((d.source as SimNode).y ?? 0) + ((d.target as SimNode).y ?? 0)) / 2);
+      // 更新标签位置
+      linkLabelGroup.each(function (d) {
+        const sx = (d.source as SimNode).x ?? 0;
+        const sy = (d.source as SimNode).y ?? 0;
+        const tx = (d.target as SimNode).x ?? 0;
+        const ty = (d.target as SimNode).y ?? 0;
+        const mx = (sx + tx) / 2;
+        const my = (sy + ty) / 2;
+        const g = d3.select(this);
+        const textEl = g.select('.graph-link-label-text').node() as SVGTextElement;
+        const bbox = textEl?.getBBox();
+        g.select('.graph-link-label-bg')
+          .attr('x', mx - (bbox?.width ?? 0) / 2 - 4)
+          .attr('y', my - (bbox?.height ?? 0) / 2 - 1)
+          .attr('width', (bbox?.width ?? 0) + 8)
+          .attr('height', (bbox?.height ?? 0) + 2);
+        g.select('.graph-link-label-text')
+          .attr('x', mx)
+          .attr('y', my);
+      });
 
       nodeGroup.attr('transform', (d) => `translate(${d.x ?? 0},${d.y ?? 0})`);
     });
@@ -278,12 +506,134 @@ export function KnowledgeGraphView({ nodes, edges, onNodeClick }: KnowledgeGraph
     return () => {
       simulation.stop();
     };
-  }, [nodes, edges, onNodeClick]);
+  }, [nodes, edges, onNodeClick, selectedNode]);
 
   useEffect(() => {
     const cleanup = renderGraph();
     return () => cleanup?.();
   }, [renderGraph]);
+
+  // 选中节点高亮 effect
+  useEffect(() => {
+    if (!svgRef.current) return;
+    const svg = d3.select(svgRef.current);
+    const link = svg.selectAll<SVGPathElement, SimLink>('.graph-link');
+    const linkLabelBg = svg.selectAll<SVGRectElement, SimLink>('.graph-link-label-bg');
+    const linkLabelText = svg.selectAll<SVGTextElement, SimLink>('.graph-link-label-text');
+    const nodeCircle = svg.selectAll<SVGCircleElement, SimNode>('.graph-node-circle');
+    const nodeGlow = svg.selectAll<SVGCircleElement, SimNode>('.graph-node-glow');
+    const nodeText = svg.selectAll<SVGTextElement, SimNode>('.graph-node-text');
+    const selectedRing = svg.selectAll<SVGCircleElement, SimNode>('.graph-node-selected-ring');
+    const selectedRing2 = svg.selectAll<SVGCircleElement, SimNode>('.graph-node-selected-ring-2');
+
+    const isDark = document.documentElement.classList.contains('dark');
+
+    if (!selectedNode) {
+      // 清除高亮 - 恢复默认
+      link.attr('stroke-opacity', 0.3).attr('stroke-width', 1.2);
+      linkLabelBg.attr('fill-opacity', 0.85);
+      linkLabelText.attr('opacity', 1);
+      nodeCircle
+        .attr('fill-opacity', 0.9)
+        .attr('stroke-opacity', 1)
+        .attr('stroke-width', (d: SimNode) => {
+          const conn = (d.sourceLinks?.length ?? 0) + (d.targetLinks?.length ?? 0);
+          return conn >= 5 ? 2.5 : conn >= 3 ? 2 : 1.5;
+        })
+        .attr('filter', (d: SimNode) => {
+          const conn = (d.sourceLinks?.length ?? 0) + (d.targetLinks?.length ?? 0);
+          return conn >= 3 ? 'url(#node-shadow)' : 'none';
+        });
+      nodeGlow.attr('fill-opacity', 0.5);
+      nodeText.attr('opacity', 1);
+      // 隐藏选中光环
+      selectedRing.style('display', 'none').attr('opacity', 0);
+      selectedRing2.style('display', 'none').attr('opacity', 0);
+      return;
+    }
+
+    const selectedId = selectedNode.id;
+    const connectedIds = new Set<string>([selectedId]);
+    edges.forEach((e) => {
+      if (e.source === selectedId) connectedIds.add(e.target);
+      if (e.target === selectedId) connectedIds.add(e.source);
+    });
+
+    // 边
+    link.attr('stroke-opacity', function () {
+      const d = d3.select(this).datum() as SimLink | undefined;
+      if (!d) return 0.3;
+      const sId = typeof d.source === 'string' ? d.source : (d.source as SimNode).id;
+      const tId = typeof d.target === 'string' ? d.target : (d.target as SimNode).id;
+      return (sId === selectedId || tId === selectedId) ? 0.8 : 0.04;
+    }).attr('stroke-width', function () {
+      const d = d3.select(this).datum() as SimLink | undefined;
+      if (!d) return 1.2;
+      const sId = typeof d.source === 'string' ? d.source : (d.source as SimNode).id;
+      const tId = typeof d.target === 'string' ? d.target : (d.target as SimNode).id;
+      return (sId === selectedId || tId === selectedId) ? 2.5 : 0.8;
+    });
+
+    // 标签
+    linkLabelBg.attr('fill-opacity', function () {
+      const d = d3.select(this.parentNode as Element).datum() as SimLink | undefined;
+      if (!d) return 0.85;
+      const sId = typeof d.source === 'string' ? d.source : (d.source as SimNode).id;
+      const tId = typeof d.target === 'string' ? d.target : (d.target as SimNode).id;
+      return (sId === selectedId || tId === selectedId) ? 0.95 : 0.05;
+    });
+    linkLabelText.attr('opacity', function () {
+      const d = d3.select(this.parentNode as Element).datum() as SimLink | undefined;
+      if (!d) return 1;
+      const sId = typeof d.source === 'string' ? d.source : (d.source as SimNode).id;
+      const tId = typeof d.target === 'string' ? d.target : (d.target as SimNode).id;
+      return (sId === selectedId || tId === selectedId) ? 1 : 0.05;
+    });
+
+    // 节点圆形：选中的节点特殊高亮，连接节点正常高亮，其余淡化
+    nodeCircle
+      .attr('fill-opacity', (d: SimNode) => {
+        if (!d) return 0.9;
+        if (d.id === selectedId) return 1;
+        return connectedIds.has(d.id) ? 0.9 : 0.08;
+      })
+      .attr('stroke-opacity', (d: SimNode) => {
+        if (!d) return 1;
+        if (d.id === selectedId) return 1;
+        return connectedIds.has(d.id) ? 0.8 : 0.06;
+      })
+      .attr('stroke-width', (d: SimNode) => {
+        if (!d) return 1.5;
+        if (d.id === selectedId) return 4;
+        return connectedIds.has(d.id) ? 2 : 1;
+      })
+      .attr('filter', (d: SimNode) => {
+        if (!d) return 'none';
+        if (d.id === selectedId) return 'url(#selected-glow)';
+        const conn = (d.sourceLinks?.length ?? 0) + (d.targetLinks?.length ?? 0);
+        return connectedIds.has(d.id) && conn >= 3 ? 'url(#node-shadow)' : 'none';
+      });
+
+    nodeGlow.attr('fill-opacity', (d: SimNode) => {
+      if (!d) return 0.5;
+      if (d.id === selectedId) return 0.8;
+      return connectedIds.has(d.id) ? 0.6 : 0.01;
+    });
+
+    nodeText.attr('opacity', (d: SimNode) => {
+      if (!d) return 1;
+      if (d.id === selectedId) return 1;
+      return connectedIds.has(d.id) ? 0.9 : 0.08;
+    });
+
+    // 选中节点：显示脉冲光环
+    selectedRing
+      .style('display', (d: SimNode) => d.id === selectedId ? 'block' : 'none')
+      .attr('opacity', (d: SimNode) => d.id === selectedId ? null : 0);
+    selectedRing2
+      .style('display', (d: SimNode) => d.id === selectedId ? 'block' : 'none')
+      .attr('opacity', (d: SimNode) => d.id === selectedId ? null : 0);
+  }, [selectedNode, edges]);
 
   // 监听容器大小变化
   useEffect(() => {
@@ -294,6 +644,14 @@ export function KnowledgeGraphView({ nodes, edges, onNodeClick }: KnowledgeGraph
     observer.observe(containerRef.current);
     return () => observer.disconnect();
   }, [renderGraph]);
+
+  // 获取选中节点的关联边和节点
+  const selectedEdges = selectedNode
+    ? edges.filter((e) => e.source === selectedNode.id || e.target === selectedNode.id)
+    : [];
+
+  const outgoingEdges = selectedEdges.filter((e) => e.source === selectedNode?.id);
+  const incomingEdges = selectedEdges.filter((e) => e.target === selectedNode?.id);
 
   if (nodes.length === 0) {
     return (
@@ -307,18 +665,340 @@ export function KnowledgeGraphView({ nodes, edges, onNodeClick }: KnowledgeGraph
   }
 
   return (
-    <div ref={containerRef} className="flex-1 relative overflow-hidden">
+    <div ref={containerRef} className="flex-1 relative overflow-hidden min-h-0">
       <svg ref={svgRef} className="w-full h-full" />
-      {/* 图例 */}
-      <div className="absolute bottom-3 left-3 bg-background/80 backdrop-blur-sm border border-border rounded-lg p-2.5 text-xs space-y-1.5">
-        <div className="font-medium text-foreground mb-1">关系图例</div>
+
+      {/* 图例 - 更精致 */}
+      <div className="absolute bottom-4 left-4 bg-background/70 backdrop-blur-lg border border-border/50 rounded-xl p-3 text-xs space-y-2 shadow-lg">
+        <div className="font-semibold text-foreground/80 text-[11px] mb-1.5">关系类型</div>
         {Object.entries(RELATION_COLORS).map(([rel, color]) => (
-          <div key={rel} className="flex items-center gap-2">
-            <div className="w-4 h-0.5" style={{ backgroundColor: color }} />
-            <span className="text-muted-foreground">{rel}</span>
+          <div key={rel} className="flex items-center gap-2.5">
+            <div className="w-5 h-[2px] rounded-full" style={{ backgroundColor: color }} />
+            <span className="text-muted-foreground text-[11px]">{rel}</span>
           </div>
         ))}
+        <div className="border-t border-border/40 pt-1.5 mt-1.5 space-y-1.5">
+          <div className="font-semibold text-foreground/80 text-[11px]">节点层级</div>
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-4 rounded-full" style={{ backgroundColor: isDarkContext() ? '#818cf8' : '#6366f1' }} />
+            <span className="text-muted-foreground text-[11px]">核心（≥5连接）</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 rounded-full" style={{ backgroundColor: isDarkContext() ? '#60a5fa' : '#3b82f6' }} />
+            <span className="text-muted-foreground text-[11px]">重要（≥3连接）</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: isDarkContext() ? '#64748b' : '#94a3b8' }} />
+            <span className="text-muted-foreground text-[11px]">一般</span>
+          </div>
+        </div>
       </div>
+
+      {/* 节点详情 - 精致面板 */}
+      {selectedNode && (
+        <div className="absolute top-4 right-4 w-[390px] max-h-[calc(100%-32px)] bg-background/90 backdrop-blur-xl border border-border/60 rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+          {/* 标题栏 */}
+          <div className="shrink-0 px-5 pt-5 pb-4 border-b border-border/40">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-[15px] font-bold text-foreground tracking-tight">{selectedNode.label}</h3>
+                  {(() => {
+                    const degree = selectedEdges.length;
+                    if (degree >= 5) return (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400 flex items-center gap-0.5">
+                        <Sparkles className="w-2.5 h-2.5" />核心
+                      </span>
+                    );
+                    if (degree >= 3) return (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400">重要</span>
+                    );
+                    return null;
+                  })()}
+                </div>
+              </div>
+              <button
+                className="text-muted-foreground/60 hover:text-foreground transition-colors shrink-0 p-1 rounded-lg hover:bg-accent/60"
+                onClick={() => onNavigateToNode?.(null)}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {selectedNode.description && (
+              <p className="text-xs text-muted-foreground mt-2.5 leading-relaxed">{selectedNode.description}</p>
+            )}
+
+            {/* 统计条 */}
+            <div className="flex items-center gap-4 mt-3 text-[11px] text-muted-foreground/70">
+              <span className="flex items-center gap-1.5">
+                <Link2 className="w-3 h-3" />
+                {selectedEdges.length} 条关系
+              </span>
+              <span className="flex items-center gap-1.5">
+                <BookOpen className="w-3 h-3" />
+                {selectedNode.sourceFileIds.length} 个文件
+              </span>
+              {selectedNode.pageReferences.length > 0 && (
+                <span className="flex items-center gap-1.5">
+                  <Hash className="w-3 h-3" />
+                  {selectedNode.pageReferences.length} 处引用
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* 可滚动内容区 */}
+          <div className="flex-1 overflow-y-auto overscroll-contain">
+            <div className="p-5 space-y-5">
+              {/* 出发关系 */}
+              {outgoingEdges.length > 0 && (
+                <div>
+                  <div className="flex items-center gap-1.5 mb-3">
+                    <div className="w-5 h-5 rounded-md bg-indigo-100 dark:bg-indigo-900/30 flex items-center justify-center">
+                      <ArrowRight className="w-3 h-3 text-indigo-600 dark:text-indigo-400" />
+                    </div>
+                    <span className="text-[12px] font-semibold text-foreground">指向的知识点</span>
+                    <span className="text-[10px] text-muted-foreground/50 ml-0.5">{outgoingEdges.length}</span>
+                  </div>
+                  <div className="space-y-1.5">
+                    {outgoingEdges.map((edge) => {
+                      const targetNode = nodes.find((n) => n.id === edge.target);
+                      if (!targetNode) return null;
+                      const color = RELATION_COLORS[edge.relation] || '#64748b';
+                      return (
+                        <div
+                          key={edge.id}
+                          className="cursor-pointer group rounded-xl border border-transparent hover:border-border/60 hover:bg-accent/30 transition-all px-3 py-2.5 -mx-1"
+                          onClick={() => onNavigateToNode?.(targetNode)}
+                        >
+                          <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: color, boxShadow: `0 0 4px ${color}40` }} />
+                            <div className="h-px w-3 shrink-0" style={{ backgroundColor: color, opacity: 0.4 }} />
+                            <span
+                              className="text-[10px] px-2 py-0.5 rounded-full font-medium shrink-0 whitespace-nowrap"
+                              style={{ backgroundColor: color + '15', color, border: `1px solid ${color}20` }}
+                            >
+                              {edge.relation}
+                            </span>
+                            <div className="h-px w-2 shrink-0 bg-border/40" />
+                            <span className="text-xs font-semibold group-hover:text-primary transition-colors truncate">
+                              {targetNode.label}
+                            </span>
+                          </div>
+                          {targetNode.description && (
+                            <p className="text-[11px] text-muted-foreground/70 mt-1.5 leading-relaxed line-clamp-2 pl-[18px]">
+                              {targetNode.description}
+                            </p>
+                          )}
+                          {(() => {
+                            const targetDegree = edges.filter(e => e.source === targetNode.id || e.target === targetNode.id).length;
+                            if (targetDegree > 1) return (
+                              <div className="text-[10px] text-muted-foreground/40 mt-1 pl-[18px] flex items-center gap-1">
+                                <Link2 className="w-2.5 h-2.5" />{targetDegree} 条关联
+                              </div>
+                            );
+                            return null;
+                          })()}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* 入边关系 */}
+              {incomingEdges.length > 0 && (
+                <div>
+                  <div className="flex items-center gap-1.5 mb-3">
+                    <div className="w-5 h-5 rounded-md bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center">
+                      <ArrowLeft className="w-3 h-3 text-blue-600 dark:text-blue-400" />
+                    </div>
+                    <span className="text-[12px] font-semibold text-foreground">被哪些知识点指向</span>
+                    <span className="text-[10px] text-muted-foreground/50 ml-0.5">{incomingEdges.length}</span>
+                  </div>
+                  <div className="space-y-1.5">
+                    {incomingEdges.map((edge) => {
+                      const sourceNode = nodes.find((n) => n.id === edge.source);
+                      if (!sourceNode) return null;
+                      const color = RELATION_COLORS[edge.relation] || '#64748b';
+                      return (
+                        <div
+                          key={edge.id}
+                          className="cursor-pointer group rounded-xl border border-transparent hover:border-border/60 hover:bg-accent/30 transition-all px-3 py-2.5 -mx-1"
+                          onClick={() => onNavigateToNode?.(sourceNode)}
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-semibold group-hover:text-primary transition-colors truncate">
+                              {sourceNode.label}
+                            </span>
+                            <div className="h-px w-2 shrink-0 bg-border/40" />
+                            <span
+                              className="text-[10px] px-2 py-0.5 rounded-full font-medium shrink-0 whitespace-nowrap"
+                              style={{ backgroundColor: color + '15', color, border: `1px solid ${color}20` }}
+                            >
+                              {edge.relation}
+                            </span>
+                            <div className="h-px w-3 shrink-0" style={{ backgroundColor: color, opacity: 0.4 }} />
+                            <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: color, boxShadow: `0 0 4px ${color}40` }} />
+                          </div>
+                          {sourceNode.description && (
+                            <p className="text-[11px] text-muted-foreground/70 mt-1.5 leading-relaxed line-clamp-2">
+                              {sourceNode.description}
+                            </p>
+                          )}
+                          {(() => {
+                            const sourceDegree = edges.filter(e => e.source === sourceNode.id || e.target === sourceNode.id).length;
+                            if (sourceDegree > 1) return (
+                              <div className="text-[10px] text-muted-foreground/40 mt-1 flex items-center gap-1">
+                                <Link2 className="w-2.5 h-2.5" />{sourceDegree} 条关联
+                              </div>
+                            );
+                            return null;
+                          })()}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* 二度关系 */}
+              {(() => {
+                const directNeighborIds = new Set([
+                  selectedNode.id,
+                  ...outgoingEdges.map(e => e.target),
+                  ...incomingEdges.map(e => e.source),
+                ]);
+                const secondDegreeNodes = new Map<string, { node: KnowledgeNode; viaNode: KnowledgeNode; relation: string }>();
+                for (const edge of selectedEdges) {
+                  const neighborId = edge.source === selectedNode.id ? edge.target : edge.source;
+                  const neighborEdges = edges.filter(e =>
+                    (e.source === neighborId || e.target === neighborId) &&
+                    e.source !== selectedNode.id && e.target !== selectedNode.id
+                  );
+                  for (const ne of neighborEdges) {
+                    const secondId = ne.source === neighborId ? ne.target : ne.source;
+                    if (directNeighborIds.has(secondId)) continue;
+                    const secondNode = nodes.find(n => n.id === secondId);
+                    const viaNode = nodes.find(n => n.id === neighborId);
+                    if (secondNode && viaNode && !secondDegreeNodes.has(secondId)) {
+                      secondDegreeNodes.set(secondId, { node: secondNode, viaNode, relation: ne.relation });
+                    }
+                  }
+                }
+                const secondList = [...secondDegreeNodes.values()].slice(0, 6);
+                if (secondList.length === 0) return null;
+                return (
+                  <div>
+                    <div className="flex items-center gap-1.5 mb-3">
+                      <div className="w-5 h-5 rounded-md bg-violet-100 dark:bg-violet-900/30 flex items-center justify-center">
+                        <Layers className="w-3 h-3 text-violet-600 dark:text-violet-400" />
+                      </div>
+                      <span className="text-[12px] font-semibold text-foreground">间接关联</span>
+                      <span className="text-[10px] text-muted-foreground/50 ml-0.5">二度关系</span>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {secondList.map(({ node: sNode, viaNode, relation }) => {
+                        const color = RELATION_COLORS[relation] || '#64748b';
+                        return (
+                          <button
+                            key={sNode.id}
+                            className="inline-flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-lg border border-border/50 hover:border-primary/30 hover:bg-accent/40 transition-all group"
+                            onClick={() => onNavigateToNode?.(sNode)}
+                            title={`经 "${viaNode.label}" → ${relation} → ${sNode.label}`}
+                          >
+                            <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: color }} />
+                            <span className="group-hover:text-primary transition-colors">{sNode.label}</span>
+                          </button>
+                        );
+                      })}
+                      {secondDegreeNodes.size > 6 && (
+                        <span className="text-[10px] text-muted-foreground/50 self-center">+{secondDegreeNodes.size - 6}</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* 页码引用 */}
+              {selectedNode.pageReferences.length > 0 && (
+                <div>
+                  <div className="flex items-center gap-1.5 mb-3">
+                    <div className="w-5 h-5 rounded-md bg-cyan-100 dark:bg-cyan-900/30 flex items-center justify-center">
+                      <Hash className="w-3 h-3 text-cyan-600 dark:text-cyan-400" />
+                    </div>
+                    <span className="text-[12px] font-semibold text-foreground">出现位置</span>
+                  </div>
+                  <div className="space-y-1">
+                    {selectedNode.pageReferences.map((ref) => {
+                      const [fileId, pageNum] = ref.split(':');
+                      const fileName = files.find((f) => f.id === fileId)?.name ?? '未知文件';
+                      return (
+                        <button
+                          key={ref}
+                          className="w-full flex items-center gap-2.5 text-[11px] text-left px-3 py-2 rounded-lg hover:bg-accent/40 transition-colors group"
+                          onClick={() => onGoToFile?.(selectedNode)}
+                        >
+                          <FileText className="w-3 h-3 text-muted-foreground/50 shrink-0" />
+                          <span className="truncate text-muted-foreground group-hover:text-foreground transition-colors">{fileName}</span>
+                          <span className="ml-auto shrink-0 px-1.5 py-0.5 rounded-md bg-muted/60 text-muted-foreground font-medium text-[10px]">
+                            P{pageNum}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* 来源文件 */}
+              {selectedNode.sourceFileIds.length > 0 && (
+                <div>
+                  <div className="flex items-center gap-1.5 mb-3">
+                    <div className="w-5 h-5 rounded-md bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center">
+                      <BookOpen className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                    </div>
+                    <span className="text-[12px] font-semibold text-foreground">来源文件</span>
+                  </div>
+                  <div className="space-y-1">
+                    {selectedNode.sourceFileIds.map((fileId) => {
+                      const file = files.find((f) => f.id === fileId);
+                      return (
+                        <button
+                          key={fileId}
+                          className="w-full flex items-center gap-2.5 text-xs text-left px-3 py-2.5 rounded-lg hover:bg-accent/40 transition-colors group"
+                          onClick={() => onGoToFile?.(selectedNode)}
+                        >
+                          <FileText className="w-3.5 h-3.5 text-muted-foreground/50 shrink-0" />
+                          <span className="truncate group-hover:text-primary transition-colors">{file?.name ?? '未知文件'}</span>
+                          {file?.pageCount && (
+                            <span className="ml-auto shrink-0 text-[10px] text-muted-foreground/50">{file.pageCount}页</span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* 无关系 */}
+              {selectedEdges.length === 0 && (
+                <div className="text-xs text-muted-foreground/40 text-center py-8">
+                  <Link2 className="w-8 h-8 mx-auto mb-2 opacity-20" />
+                  该节点暂无关联关系
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
+}
+
+/** 用于图例中检测暗色模式 */
+function isDarkContext() {
+  if (typeof document === 'undefined') return false;
+  return document.documentElement.classList.contains('dark');
 }

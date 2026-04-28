@@ -1,11 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { db } from '@/db';
 import type { FileDocument, PageAnalysis, KnowledgeNode, KnowledgeEdge, Workspace, Quiz, QuizQuestion, QuizDifficulty, QuizSession } from '@/types';
 import { v4 as uuid } from 'uuid';
 import { Button } from '@/components/ui/button';
 import { FileList } from '@/components/FileList';
 import { PdfViewer } from '@/components/PdfViewer';
-import { PageDetailPanel } from '@/components/PageDetailPanel';
 import { WorkspaceChat } from '@/components/WorkspaceChat';
 import { KnowledgeGraphView } from '@/components/KnowledgeGraphView';
 import { QuizSetup } from '@/components/QuizSetup';
@@ -69,6 +68,43 @@ export function WorkspaceView({
   const [generatingGraph, setGeneratingGraph] = useState(false);
   const [workspaceName, setWorkspaceName] = useState('');
   const [selectedNode, setSelectedNode] = useState<KnowledgeNode | null>(null);
+
+  // 文件列表宽度拖拽状态
+  const [fileListWidth, setFileListWidth] = useState(224);
+  const [isFileListDragging, setIsFileListDragging] = useState(false);
+  const fileListStartXRef = useRef(0);
+  const fileListStartWidthRef = useRef(224);
+
+  const handleFileListMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsFileListDragging(true);
+    fileListStartXRef.current = e.clientX;
+    fileListStartWidthRef.current = fileListWidth;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }, [fileListWidth]);
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isFileListDragging) return;
+      const delta = e.clientX - fileListStartXRef.current;
+      const newWidth = Math.max(160, Math.min(400, fileListStartWidthRef.current + delta));
+      setFileListWidth(newWidth);
+    };
+    const handleMouseUp = () => {
+      setIsFileListDragging(false);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    if (isFileListDragging) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+    }
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isFileListDragging]);
 
   // Quiz状态
   const [quizPhase, setQuizPhase] = useState<QuizPhase>('setup');
@@ -421,10 +457,76 @@ export function WorkspaceView({
     [quizFileId, loadQuizHistory]
   );
 
+
+  // 图谱视图是全屏模式，不显示文件列表
+  const isGraphFullScreen = mainView === 'graph';
+
   return (
-    <div className="flex-1 flex overflow-hidden">
+    <div className="flex-1 flex overflow-hidden h-full min-h-0">
+      {/* 图谱全屏模式 */}
+      {isGraphFullScreen ? (
+        <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+          {/* 顶部栏 */}
+          <div className="h-12 flex items-center justify-between px-4 border-b border-border shrink-0">
+            <div className="flex items-center gap-2 min-w-0">
+              <Network className="w-4 h-4 text-primary shrink-0" />
+              <span className="text-sm font-medium truncate">
+                {workspaceName} - 知识图谱
+              </span>
+              <span className="text-xs text-muted-foreground shrink-0">
+                ({graphNodes.length}个知识点, {graphEdges.length}条关系)
+              </span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs gap-1"
+                onClick={handleGenerateGraph}
+                disabled={generatingGraph}
+              >
+                {generatingGraph ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : (
+                  <RefreshCw className="w-3 h-3" />
+                )}
+                {generatingGraph ? '生成中...' : '重新生成'}
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                onClick={() => {
+                  setMainView('file');
+                  setSelectedNode(null);
+                }}
+              >
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+          </div>
+
+          {/* 图谱内容区 - 全屏展示 */}
+          <div className="flex-1 overflow-hidden flex flex-col min-h-0">
+            <KnowledgeGraphView
+              nodes={graphNodes}
+              edges={graphEdges}
+              onNodeClick={handleNodeClick}
+              selectedNode={selectedNode}
+              onNavigateToNode={setSelectedNode}
+              onGoToFile={handleNodeGoToFile}
+              files={files}
+            />
+          </div>
+        </div>
+      ) : (
+      <>
+      {/* 非图谱模式：文件列表 + 主内容区 */}
       {/* 文件列表面板 */}
-      <div className="w-56 border-r border-border flex flex-col bg-card">
+      <div
+        style={{ width: fileListWidth, minWidth: fileListWidth, maxWidth: fileListWidth }}
+        className="shrink-0 border-r border-border flex flex-col bg-card"
+      >
         <div className="h-12 flex items-center px-3 border-b border-border">
           <span className="text-sm font-medium truncate flex-1">
             文件列表
@@ -463,12 +565,34 @@ export function WorkspaceView({
           </label>
         </div>
 
-        {/* 知识图谱按钮 */}
+        {/* Quiz按钮 */}
         <div className="p-2 border-t border-border">
           <Button
             variant="outline"
             className="w-full justify-start gap-2 text-xs h-8"
-            onClick={handleGenerateGraph}
+            onClick={() => currentFileId && handleOpenQuiz(currentFileId)}
+            disabled={!currentFileId || currentFile?.parseStatus !== 'done' || quizLoading}
+          >
+            {quizLoading ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                出题中...
+              </>
+            ) : (
+              <>
+                <Zap className="w-3.5 h-3.5" />
+                测验
+              </>
+            )}
+          </Button>
+        </div>
+
+        {/* 知识图谱按钮：已有数据→查看，无数据→生成 */}
+        <div className="p-2 border-t border-border">
+          <Button
+            variant="outline"
+            className="w-full justify-start gap-2 text-xs h-8"
+            onClick={graphNodes.length > 0 ? () => setMainView('graph') : handleGenerateGraph}
             disabled={generatingGraph || parsing}
           >
             {generatingGraph ? (
@@ -478,8 +602,8 @@ export function WorkspaceView({
               </>
             ) : graphNodes.length > 0 ? (
               <>
-                <RefreshCw className="w-3.5 h-3.5" />
-                刷新知识图谱
+                <Network className="w-3.5 h-3.5" />
+                查看知识图谱
               </>
             ) : (
               <>
@@ -490,16 +614,18 @@ export function WorkspaceView({
           </Button>
         </div>
 
-        {/* 查看知识图谱按钮（已有数据时显示） */}
+        {/* 重新生成图谱（已有图谱时显示） */}
         {graphNodes.length > 0 && (
           <div className="px-2 pb-2">
             <Button
-              variant={mainView === 'graph' ? 'default' : 'outline'}
-              className="w-full justify-start gap-2 text-xs h-8"
-              onClick={() => setMainView('graph')}
+              variant="ghost"
+              size="sm"
+              className="w-full justify-start gap-2 text-xs h-7 text-muted-foreground"
+              onClick={handleGenerateGraph}
+              disabled={generatingGraph}
             >
-              <Network className="w-3.5 h-3.5" />
-              查看知识图谱
+              <RefreshCw className="w-3 h-3" />
+              重新生成图谱
             </Button>
           </div>
         )}
@@ -515,13 +641,28 @@ export function WorkspaceView({
             }}
           >
             <MessageSquare className="w-3.5 h-3.5" />
-            跨文件问答
+            AI 问答
           </Button>
         </div>
       </div>
 
+      {/* 文件列表与主内容区之间的拖拽分隔条 */}
+      <div
+        onMouseDown={handleFileListMouseDown}
+        className={`
+          w-1.5 shrink-0 cursor-col-resize 
+          bg-border hover:bg-primary/40 
+          flex items-center justify-center
+          transition-colors
+          ${isFileListDragging ? 'bg-primary/60' : ''}
+        `}
+        style={{ zIndex: 50 }}
+      >
+        <div className={`h-8 w-1 rounded-full bg-muted-foreground/30 ${isFileListDragging ? 'bg-primary/60' : ''}`} />
+      </div>
+
       {/* 主内容区 */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden min-w-0">
         {mainView === 'quiz' ? (
           /* Quiz视图 */
           <div className="flex-1 flex overflow-hidden">
@@ -535,7 +676,7 @@ export function WorkspaceView({
                 />
                 {/* 历史Quiz侧边栏 */}
                 {quizHistory.length > 0 && (
-                  <div className="w-56 border-l border-border bg-card p-3 space-y-2 overflow-y-auto">
+                  <div className="w-56 border-l border-border bg-card p-3 space-y-2 overflow-y-auto shrink-0">
                     <h4 className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5">
                       <History className="w-3 h-3" />
                       历史测验
@@ -547,7 +688,7 @@ export function WorkspaceView({
                         onClick={() => handleLoadHistoryQuiz(q.id)}
                       >
                         <div className="flex items-center justify-between">
-                          <div className="text-xs space-y-0.5">
+                          <div className="text-xs space-y-0.5 min-w-0">
                             <div className="font-medium truncate">
                               {q.keywords.length > 0 ? q.keywords.join('、') : '全部知识点'}
                             </div>
@@ -588,145 +729,11 @@ export function WorkspaceView({
               />
             )}
           </div>
-        ) : mainView === 'graph' ? (
-          /* 知识图谱视图 */
-          <div className="flex-1 flex flex-col overflow-hidden">
-            {/* 顶部栏 */}
-            <div className="h-12 flex items-center justify-between px-4 border-b border-border">
-              <div className="flex items-center gap-2">
-                <Network className="w-4 h-4 text-primary" />
-                <span className="text-sm font-medium">
-                  {workspaceName} - 知识图谱
-                </span>
-                <span className="text-xs text-muted-foreground">
-                  ({graphNodes.length}个知识点, {graphEdges.length}条关系)
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-7 text-xs gap-1"
-                  onClick={handleGenerateGraph}
-                  disabled={generatingGraph}
-                >
-                  {generatingGraph ? (
-                    <Loader2 className="w-3 h-3 animate-spin" />
-                  ) : (
-                    <RefreshCw className="w-3 h-3" />
-                  )}
-                  {generatingGraph ? '生成中...' : '刷新'}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7"
-                  onClick={() => {
-                    setMainView('file');
-                    setSelectedNode(null);
-                  }}
-                >
-                  <X className="w-4 h-4" />
-                </Button>
-              </div>
-            </div>
-
-            {/* 图谱内容区 */}
-            <div className="flex-1 flex overflow-hidden">
-              <KnowledgeGraphView
-                nodes={graphNodes}
-                edges={graphEdges}
-                onNodeClick={handleNodeClick}
-              />
-
-              {/* 右侧节点详情面板 */}
-              {selectedNode && (
-                <div className="w-72 border-l border-border bg-card p-4 space-y-4 overflow-y-auto">
-                  <div className="flex items-start justify-between">
-                    <h3 className="text-sm font-semibold">{selectedNode.label}</h3>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6 shrink-0"
-                      onClick={() => setSelectedNode(null)}
-                    >
-                      <XCircle className="w-4 h-4" />
-                    </Button>
-                  </div>
-
-                  {selectedNode.description && (
-                    <div>
-                      <div className="text-xs text-muted-foreground mb-1">描述</div>
-                      <p className="text-sm">{selectedNode.description}</p>
-                    </div>
-                  )}
-
-                  {selectedNode.sourceFileIds.length > 0 && (
-                    <div>
-                      <div className="text-xs text-muted-foreground mb-1">来源文件</div>
-                      <div className="space-y-1">
-                        {selectedNode.sourceFileIds.map((fileId) => (
-                          <Button
-                            key={fileId}
-                            variant="ghost"
-                            size="sm"
-                            className="w-full justify-start text-xs h-7"
-                            onClick={() => handleNodeGoToFile(selectedNode)}
-                          >
-                            <FileText className="w-3 h-3 mr-1" />
-                            {files.find((f) => f.id === fileId)?.name ?? '未知文件'}
-                          </Button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* 相关关系 */}
-                  <div>
-                    <div className="text-xs text-muted-foreground mb-1">相关关系</div>
-                    <div className="space-y-1">
-                      {graphEdges
-                        .filter((e) => e.source === selectedNode.id || e.target === selectedNode.id)
-                        .map((edge) => {
-                          const isSource = edge.source === selectedNode.id;
-                          const otherNodeId = isSource ? edge.target : edge.source;
-                          const otherNode = graphNodes.find((n) => n.id === otherNodeId);
-                          return (
-                            <div key={edge.id} className="text-xs flex items-center gap-1">
-                              {isSource ? (
-                                <>
-                                  <span className="text-muted-foreground">→</span>
-                                  <span className="text-primary">{edge.relation}</span>
-                                  <span className="text-muted-foreground">→</span>
-                                </>
-                              ) : (
-                                <>
-                                  <span className="text-muted-foreground">←</span>
-                                  <span className="text-primary">{edge.relation}</span>
-                                  <span className="text-muted-foreground">←</span>
-                                </>
-                              )}
-                              <button
-                                className="hover:text-primary transition-colors"
-                                onClick={() => {
-                                  const node = graphNodes.find((n) => n.id === otherNodeId);
-                                  if (node) setSelectedNode(node);
-                                }}
-                              >
-                                {otherNode?.label ?? '未知'}
-                              </button>
-                            </div>
-                          );
-                        })}
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
         ) : showWorkspaceChat || mainView === 'chat' ? (
           <WorkspaceChat
             workspaceId={workspaceId}
+            workspaceName={workspaceName}
+            currentFileName={currentFile?.name ?? null}
             onClose={() => {
               setShowWorkspaceChat(false);
               setMainView('file');
@@ -735,16 +742,16 @@ export function WorkspaceView({
             onSelectConversation={onSelectConversation}
           />
         ) : currentFile ? (
-          <>
+          <div className="flex-1 flex overflow-hidden">
             {/* PDF预览区 */}
-            <div className="flex-1 flex flex-col overflow-hidden">
+            <div className="flex-1 flex flex-col overflow-hidden min-w-0">
               {/* 文件信息栏 */}
-              <div className="h-12 flex items-center justify-between px-4 border-b border-border">
-                <div className="flex items-center gap-2">
-                  <FileText className="w-4 h-4 text-muted-foreground" />
+              <div className="h-12 flex items-center justify-between px-4 border-b border-border shrink-0">
+                <div className="flex items-center gap-2 min-w-0">
+                  <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
                   <span className="text-sm font-medium truncate">{currentFile.name}</span>
                   <span
-                    className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                    className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 ${
                       currentFile.parseStatus === 'done'
                         ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
                         : currentFile.parseStatus === 'parsing'
@@ -763,19 +770,7 @@ export function WorkspaceView({
                           : '待解析'}
                   </span>
                 </div>
-                <div className="flex items-center gap-1">
-                  {/* Quiz按钮 */}
-                  {currentFile.parseStatus === 'done' && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-7 text-xs gap-1"
-                      onClick={() => handleOpenQuiz(currentFileId!)}
-                    >
-                      <Zap className="w-3 h-3" />
-                      Quiz
-                    </Button>
-                  )}
+                <div className="flex items-center gap-1 shrink-0">
                   <Button
                     variant="ghost"
                     size="icon"
@@ -792,7 +787,7 @@ export function WorkspaceView({
 
               {/* 解析进度 */}
               {parsing && (
-                <div className="px-4 py-2 bg-muted/50 text-xs text-muted-foreground flex items-center gap-2">
+                <div className="px-4 py-2 bg-muted/50 text-xs text-muted-foreground flex items-center gap-2 shrink-0">
                   <Loader2 className="w-3 h-3 animate-spin" />
                   正在解析第 {parseProgress.current}/{parseProgress.total} 页...
                 </div>
@@ -806,23 +801,10 @@ export function WorkspaceView({
                 onExpandPage={onExpandPage}
               />
             </div>
-
-            {/* 右侧详情/对话面板 */}
-            {expandedPageNumber !== null && (
-              <PageDetailPanel
-                fileId={currentFileId!}
-                workspaceId={workspaceId}
-                pageNumber={expandedPageNumber}
-                pageAnalyses={pageAnalyses}
-                onClose={() => onExpandPage(null)}
-                currentConversationId={currentConversationId}
-                onSelectConversation={onSelectConversation}
-              />
-            )}
-          </>
+          </div>
         ) : (
           /* 未选择文件时 */
-          <div className="flex-1 flex items-center justify-center">
+          <div className="flex-1 flex items-center justify-center p-6">
             <div className="text-center space-y-4">
               <FileText className="w-12 h-12 text-muted-foreground/30 mx-auto" />
               <div>
@@ -845,6 +827,8 @@ export function WorkspaceView({
           </div>
         )}
       </div>
+      </>
+      )}
     </div>
   );
 }

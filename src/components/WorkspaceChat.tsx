@@ -11,6 +11,8 @@ import { X, Send, Loader2, MessageSquare } from 'lucide-react';
 
 interface WorkspaceChatProps {
   workspaceId: string;
+  workspaceName: string;
+  currentFileName: string | null;
   onClose: () => void;
   currentConversationId: string | null;
   onSelectConversation: (id: string | null) => void;
@@ -18,6 +20,8 @@ interface WorkspaceChatProps {
 
 export function WorkspaceChat({
   workspaceId,
+  workspaceName,
+  currentFileName,
   onClose,
   currentConversationId,
   onSelectConversation,
@@ -211,8 +215,10 @@ export function WorkspaceChat({
         <div className="h-12 flex items-center justify-between px-4 border-b border-border">
           <div className="flex items-center gap-2">
             <MessageSquare className="w-4 h-4 text-primary" />
-            <span className="text-sm font-medium">跨文件问答</span>
-            <span className="text-xs text-muted-foreground">— 可以综合所有课件内容回答</span>
+            <span className="text-sm font-medium">
+              {currentFileName ? `${currentFileName} AI问答` : `${workspaceName || '课件'} AI问答`}
+            </span>
+            <span className="text-xs text-muted-foreground">— 基于课件内容智能解答</span>
           </div>
           <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose}>
             <X className="w-4 h-4" />
@@ -224,8 +230,8 @@ export function WorkspaceChat({
             {messages.length === 0 && (
               <div className="text-center py-12">
                 <MessageSquare className="w-10 h-10 text-muted-foreground/30 mx-auto mb-3" />
-                <p className="text-sm text-muted-foreground">输入问题，综合所有课件内容回答</p>
-                <p className="text-xs text-muted-foreground/60 mt-1">如：这门课的考核重点是什么？</p>
+                <p className="text-sm text-muted-foreground">输入问题，基于课件内容为你解答</p>
+                <p className="text-xs text-muted-foreground/60 mt-1">如：这节课的重点是什么？</p>
               </div>
             )}
             {messages.map((msg) => (
@@ -254,7 +260,7 @@ export function WorkspaceChat({
         <div className="p-3 border-t border-border max-w-3xl mx-auto w-full">
           <div className="flex gap-2">
             <Textarea
-              placeholder="综合所有课件内容提问... (Ctrl+Enter 发送)"
+              placeholder="针对课件内容提问... (Ctrl+Enter 发送)"
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}

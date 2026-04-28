@@ -199,7 +199,7 @@ export function PageDetailPanel({
   );
 
   return (
-    <div className="w-[420px] border-l border-border flex flex-col bg-card">
+    <div className="h-full border-l border-border flex flex-col bg-card min-w-0">
       {/* 头部 */}
       <div className="h-12 flex items-center justify-between px-4 border-b border-border">
         <div className="flex items-center gap-2">

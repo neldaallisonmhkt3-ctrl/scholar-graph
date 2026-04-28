@@ -80,7 +80,7 @@ export function Sidebar({ currentWorkspaceId, onSelectWorkspace, onOpenSettings 
   );
 
   return (
-    <div className="w-60 border-r border-border flex flex-col bg-card">
+    <div className="h-full border-r border-border flex flex-col bg-card">
       {/* 标题 */}
       <div className="h-14 flex items-center px-4 border-b border-border gap-2">
         <BookOpen className="w-5 h-5 text-primary" />
