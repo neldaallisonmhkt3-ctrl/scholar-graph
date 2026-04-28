@@ -146,8 +146,84 @@ export interface QuizSession {
   submitted: boolean;
 }
 
+// ========== 实验数据处理 ==========
+/** 数据变量（一列数据） */
+export interface LabVariable {
+  /** 变量名，如 D/mm */
+  name: string;
+  /** 测量值列表 */
+  values: number[];
+  /** 仪器误差限 Δ仪，用于B类不确定度 */
+  instrumentError?: number;
+}
+
+/** 预设公式类型 */
+export type LabPresetFormula =
+  | 'average'       // 算术平均值 x̄
+  | 'stddev'        // 标准差 S
+  | 'uA'            // A类不确定度 uA = S/√n
+  | 'uB'            // B类不确定度 uB = Δ仪/√3
+  | 'uCombined'     // 合成不确定度 u = √(uA²+uB²)
+  | 'uRelative';    // 相对不确定度 ur = u/x̄
+
+/** 公式模板 */
+export interface LabFormulaTemplate {
+  id: string;
+  name: string;
+  description: string;
+  /** math.js表达式，变量用大括号引用，如 pi * {D_avg}^2 * {h_avg} / 4 */
+  expression: string;
+  /** 需要的输入变量描述 */
+  inputs: { key: string; label: string }[];
+}
+
+/** 自定义公式 */
+export interface LabCustomFormula {
+  id: string;
+  name: string;
+  /** math.js表达式 */
+  expression: string;
+  createdAt: number;
+}
+
+/** 计算结果 */
+export interface LabCalcResult {
+  formula: LabPresetFormula | string;
+  displayName: string;
+  value: number;
+  unit?: string;
+  /** 完整的计算过程文本 */
+  process: string;
+}
+
+/** 图表配置 */
+export interface LabChartConfig {
+  type: 'scatter' | 'line' | 'polar';
+  xVariable: string;
+  yVariable: string;
+  /** 拟合类型 */
+  fitType?: 'none' | 'linear' | 'quadratic' | 'cubic';
+  title?: string;
+}
+
+/** 实验数据项目（顶层实体） */
+export interface LabProject {
+  id: string;
+  name: string;
+  /** 变量列表 */
+  variables: LabVariable[];
+  /** 自定义公式列表 */
+  customFormulas: LabCustomFormula[];
+  /** 保存的计算结果 */
+  calcResults: LabCalcResult[];
+  /** 图表配置列表 */
+  charts: LabChartConfig[];
+  createdAt: number;
+  updatedAt: number;
+}
+
 // ========== 应用状态 ==========
-export type AppView = 'workspace' | 'settings';
+export type AppView = 'workspace' | 'settings' | 'lab';
 
 export interface AppState {
   currentWorkspaceId: string | null;

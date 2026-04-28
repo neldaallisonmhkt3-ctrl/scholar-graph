@@ -4,6 +4,7 @@ import { Sidebar } from '@/components/Sidebar';
 import { WorkspaceView } from '@/components/WorkspaceView';
 import { SettingsPanel } from '@/components/SettingsPanel';
 import { WelcomeScreen } from '@/components/WelcomeScreen';
+import { LabDataView } from '@/components/LabDataView';
 import { GripVertical } from 'lucide-react';
 
 function App() {
@@ -107,8 +108,10 @@ function App() {
       >
         <Sidebar
           currentWorkspaceId={appState.currentWorkspaceId}
+          currentView={appState.view}
           onSelectWorkspace={handleSelectWorkspace}
           onOpenSettings={() => setAppState((p) => ({ ...p, view: 'settings' }))}
+          onOpenLab={() => setAppState((p) => ({ ...p, view: 'lab' }))}
         />
       </div>
 
@@ -134,6 +137,8 @@ function App() {
       <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
         {appState.view === 'settings' ? (
           <SettingsPanel onBack={() => setAppState((p) => ({ ...p, view: 'workspace' }))} />
+        ) : appState.view === 'lab' ? (
+          <LabDataView onBack={() => setAppState((p) => ({ ...p, view: 'workspace' }))} />
         ) : appState.currentWorkspaceId ? (
           <WorkspaceView
             workspaceId={appState.currentWorkspaceId}

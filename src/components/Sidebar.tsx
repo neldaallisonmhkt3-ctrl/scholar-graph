@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { db } from '@/db';
-import type { Workspace } from '@/types';
+import type { Workspace, AppView } from '@/types';
 import { v4 as uuid } from 'uuid';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -11,15 +11,18 @@ import {
   Settings,
   Trash2,
   FolderOpen,
+  FlaskConical,
 } from 'lucide-react';
 
 interface SidebarProps {
   currentWorkspaceId: string | null;
+  currentView: AppView;
   onSelectWorkspace: (id: string | null) => void;
   onOpenSettings: () => void;
+  onOpenLab: () => void;
 }
 
-export function Sidebar({ currentWorkspaceId, onSelectWorkspace, onOpenSettings }: SidebarProps) {
+export function Sidebar({ currentWorkspaceId, currentView, onSelectWorkspace, onOpenSettings, onOpenLab }: SidebarProps) {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [showNewForm, setShowNewForm] = useState(false);
   const [newName, setNewName] = useState('');
@@ -113,6 +116,16 @@ export function Sidebar({ currentWorkspaceId, onSelectWorkspace, onOpenSettings 
 
       {/* 底部操作 */}
       <div className="p-2 border-t border-border space-y-1">
+        {/* 实验数据处理入口 */}
+        <Button
+          variant={currentView === 'lab' ? 'secondary' : 'ghost'}
+          className={`w-full justify-start gap-2 text-sm ${currentView === 'lab' ? 'bg-primary/10 text-primary' : ''}`}
+          onClick={onOpenLab}
+        >
+          <FlaskConical className="w-4 h-4" />
+          实验数据处理
+        </Button>
+
         {/* 新建工作空间 —— 使用内联表单替代Dialog */}
         {showNewForm ? (
           <div className="space-y-2 p-2 rounded-md bg-muted/50">
