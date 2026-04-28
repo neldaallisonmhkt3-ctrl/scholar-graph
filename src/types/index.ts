@@ -101,6 +101,51 @@ export interface KnowledgeGraph {
   createdAt: number;
 }
 
+// ========== 测验 ==========
+export type QuizDifficulty = 'easy' | 'medium' | 'hard';
+
+export interface Quiz {
+  id: string;
+  /** 关联的PDF文件ID */
+  fileId: string;
+  workspaceId: string;
+  /** 用户输入的关键词 */
+  keywords: string[];
+  /** 题目数量 */
+  questionCount: number;
+  /** 难度 */
+  difficulty: QuizDifficulty;
+  createdAt: number;
+}
+
+export interface QuizQuestion {
+  id: string;
+  quizId: string;
+  /** 题干 */
+  question: string;
+  /** 4个选项 */
+  options: string[];
+  /** 正确答案索引（0-3） */
+  correctIndex: number;
+  /** 答案解析 */
+  explanation: string;
+  /** 提示（答题前可查看） */
+  hint: string;
+  /** 来源页码 */
+  sourcePage: number;
+  /** 是否超出PDF范围（来自网络扩展） */
+  isExtended: boolean;
+}
+
+export interface QuizSession {
+  /** 当前答题进度 */
+  currentIndex: number;
+  /** 用户每题的选择，-1表示未答 */
+  answers: number[];
+  /** 是否已提交 */
+  submitted: boolean;
+}
+
 // ========== 应用状态 ==========
 export type AppView = 'workspace' | 'settings';
 

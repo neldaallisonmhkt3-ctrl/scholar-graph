@@ -1,15 +1,16 @@
 import type { FileDocument } from '@/types';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { FileText, Trash2, Loader2 } from 'lucide-react';
+import { FileText, Trash2, Loader2, Zap } from 'lucide-react';
 
 interface FileListProps {
   files: FileDocument[];
   currentFileId: string | null;
   onSelectFile: (id: string) => void;
   onDeleteFile: (id: string) => void;
+  onQuizFile?: (id: string) => void;
 }
 
-export function FileList({ files, currentFileId, onSelectFile, onDeleteFile }: FileListProps) {
+export function FileList({ files, currentFileId, onSelectFile, onDeleteFile, onQuizFile }: FileListProps) {
   if (files.length === 0) {
     return (
       <ScrollArea className="flex-1">
@@ -43,6 +44,17 @@ export function FileList({ files, currentFileId, onSelectFile, onDeleteFile }: F
             <span className="text-[10px] text-muted-foreground/60 shrink-0">
               {file.pageCount > 0 ? `${file.pageCount}页` : ''}
             </span>
+            {/* Quiz按钮：已解析文件显示 */}
+            {file.parseStatus === 'done' && onQuizFile && (
+              <Zap
+                className="w-3 h-3 opacity-0 group-hover:opacity-50 hover:!opacity-100 hover:text-amber-500 transition-opacity shrink-0"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onQuizFile(file.id);
+                }}
+                title="开始测验"
+              />
+            )}
             <Trash2
               className="w-3 h-3 opacity-0 group-hover:opacity-50 hover:!opacity-100 hover:text-destructive transition-opacity shrink-0"
               onClick={(e) => {

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { db } from '@/db';
-import type { FileDocument, PageAnalysis, KnowledgeNode, KnowledgeEdge, Workspace } from '@/types';
+import type { FileDocument, PageAnalysis, KnowledgeNode, KnowledgeEdge, Workspace, Quiz, QuizQuestion, QuizDifficulty, QuizSession } from '@/types';
 import { v4 as uuid } from 'uuid';
 import { Button } from '@/components/ui/button';
 import { FileList } from '@/components/FileList';
@@ -8,9 +8,13 @@ import { PdfViewer } from '@/components/PdfViewer';
 import { PageDetailPanel } from '@/components/PageDetailPanel';
 import { WorkspaceChat } from '@/components/WorkspaceChat';
 import { KnowledgeGraphView } from '@/components/KnowledgeGraphView';
+import { QuizSetup } from '@/components/QuizSetup';
+import { QuizCard } from '@/components/QuizCard';
+import { QuizResult } from '@/components/QuizResult';
 import { extractPagesText, buildLightParsePrompt, parseLightParseResult, createPageAnalysis } from '@/services/pdf';
 import { callLLM } from '@/services/llm';
 import { generateKnowledgeGraph } from '@/services/knowledgeGraph';
+import { generateQuiz, getQuizzesByFile, getQuizQuestions, deleteQuiz } from '@/services/quiz';
 import {
   Upload,
   FileText,
@@ -21,6 +25,9 @@ import {
   RefreshCw,
   XCircle,
   Info,
+  Zap,
+  History,
+  Trash2,
 } from 'lucide-react';
 
 interface WorkspaceViewProps {
@@ -34,7 +41,9 @@ interface WorkspaceViewProps {
   onOpenWorkspaceChat: () => void;
 }
 
-type MainView = 'file' | 'chat' | 'graph';
+type MainView = 'file' | 'chat' | 'graph' | 'quiz';
+
+type QuizPhase = 'setup' | 'playing' | 'result';
 
 export function WorkspaceView({
   workspaceId,
@@ -60,6 +69,14 @@ export function WorkspaceView({
   const [generatingGraph, setGeneratingGraph] = useState(false);
   const [workspaceName, setWorkspaceName] = useState('');
   const [selectedNode, setSelectedNode] = useState<KnowledgeNode | null>(null);
+
+  // Quiz状态
+  const [quizPhase, setQuizPhase] = useState<QuizPhase>('setup');
+  const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([]);
+  const [quizAnswers, setQuizAnswers] = useState<number[]>([]);
+  const [quizLoading, setQuizLoading] = useState(false);
+  const [quizFileId, setQuizFileId] = useState<string | null>(null);
+  const [quizHistory, setQuizHistory] = useState<Quiz[]>([]);
 
   // 加载文件列表
   const loadFiles = useCallback(async () => {
@@ -103,6 +120,12 @@ export function WorkspaceView({
       .sortBy('pageNumber')
       .then(setPageAnalyses);
   }, [currentFileId]);
+
+  // 加载Quiz历史
+  const loadQuizHistory = useCallback(async (fileId: string) => {
+    const quizzes = await getQuizzesByFile(fileId);
+    setQuizHistory(quizzes);
+  }, []);
 
   // 上传PDF
   const handleUpload = useCallback(
@@ -201,6 +224,12 @@ export function WorkspaceView({
       await db.pageAnalyses.where('fileId').equals(id).delete();
       await db.conversations.where('fileId').equals(id).delete();
       await db.fileBlobs.where('fileId').equals(id).delete();
+      // 删除相关Quiz
+      const quizzes = await db.quizzes.where('fileId').equals(id).toArray();
+      for (const q of quizzes) {
+        await db.quizQuestions.where('quizId').equals(q.id).delete();
+      }
+      await db.quizzes.where('fileId').equals(id).delete();
       await db.files.delete(id);
       if (currentFileId === id) {
         onSelectFile(null);
@@ -222,13 +251,11 @@ export function WorkspaceView({
 
     setGeneratingGraph(true);
     try {
-      // 获取该工作空间所有文件的页面分析（带文件名）
       const allAnalyses = await db.pageAnalyses
         .where('workspaceId')
         .equals(workspaceId)
         .toArray();
 
-      // 为每个分析附加文件名
       const analysesWithFileName = await Promise.all(
         allAnalyses.map(async (a) => {
           const f = await db.files.get(a.fileId);
@@ -242,11 +269,9 @@ export function WorkspaceView({
         return;
       }
 
-      // 删除旧的知识图谱数据
       await db.knowledgeNodes.where('workspaceId').equals(workspaceId).delete();
       await db.knowledgeEdges.where('workspaceId').equals(workspaceId).delete();
 
-      // 生成新的知识图谱
       const result = await generateKnowledgeGraph(
         workspaceId,
         workspaceName,
@@ -254,7 +279,6 @@ export function WorkspaceView({
         () => Promise.resolve(analysesWithFileName)
       );
 
-      // 存入数据库
       for (const node of result.nodes) {
         await db.knowledgeNodes.add(node);
       }
@@ -293,6 +317,110 @@ export function WorkspaceView({
     [onSelectFile]
   );
 
+  // 打开Quiz
+  const handleOpenQuiz = useCallback(
+    async (fileId: string) => {
+      setQuizFileId(fileId);
+      setQuizPhase('setup');
+      setQuizQuestions([]);
+      setQuizAnswers([]);
+      setMainView('quiz');
+      await loadQuizHistory(fileId);
+    },
+    [loadQuizHistory]
+  );
+
+  // 生成Quiz
+  const handleGenerateQuiz = useCallback(
+    async (keywords: string[], questionCount: number, difficulty: QuizDifficulty) => {
+      if (!quizFileId) return;
+
+      const providers = await db.modelProviders.toArray();
+      const activeProvider = providers[0];
+      if (!activeProvider?.apiKey) {
+        alert('请先在设置中配置 API Key');
+        return;
+      }
+
+      setQuizLoading(true);
+      try {
+        const result = await generateQuiz(
+          quizFileId,
+          workspaceId,
+          keywords,
+          questionCount,
+          difficulty,
+          activeProvider,
+          () => db.pageAnalyses.where('fileId').equals(quizFileId).sortBy('pageNumber')
+        );
+
+        setQuizQuestions(result.questions);
+        setQuizPhase('playing');
+        await loadQuizHistory(quizFileId);
+      } catch (err) {
+        console.error('出题失败:', err);
+        alert('出题失败: ' + (err instanceof Error ? err.message : String(err)));
+      } finally {
+        setQuizLoading(false);
+      }
+    },
+    [quizFileId, workspaceId, loadQuizHistory]
+  );
+
+  // Quiz答题完成
+  const handleQuizComplete = useCallback((answers: number[]) => {
+    setQuizAnswers(answers);
+    setQuizPhase('result');
+  }, []);
+
+  // Quiz重新出题
+  const handleQuizRetry = useCallback(() => {
+    setQuizPhase('setup');
+    setQuizQuestions([]);
+    setQuizAnswers([]);
+  }, []);
+
+  // Quiz返回课件
+  const handleQuizBack = useCallback(() => {
+    setMainView('file');
+    setQuizPhase('setup');
+    setQuizQuestions([]);
+    setQuizAnswers([]);
+  }, []);
+
+  // Quiz跳转到来源页
+  const handleQuizGoToPage = useCallback(
+    (page: number) => {
+      if (quizFileId) {
+        onSelectFile(quizFileId);
+        onExpandPage(page);
+        setMainView('file');
+      }
+    },
+    [quizFileId, onSelectFile, onExpandPage]
+  );
+
+  // 加载历史Quiz
+  const handleLoadHistoryQuiz = useCallback(async (quizId: string) => {
+    const questions = await getQuizQuestions(quizId);
+    if (questions.length > 0) {
+      setQuizQuestions(questions);
+      setQuizPhase('playing');
+    }
+  }, []);
+
+  // 删除历史Quiz
+  const handleDeleteHistoryQuiz = useCallback(
+    async (quizId: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      await deleteQuiz(quizId);
+      if (quizFileId) {
+        await loadQuizHistory(quizFileId);
+      }
+    },
+    [quizFileId, loadQuizHistory]
+  );
+
   return (
     <div className="flex-1 flex overflow-hidden">
       {/* 文件列表面板 */}
@@ -311,6 +439,7 @@ export function WorkspaceView({
             setMainView('file');
           }}
           onDeleteFile={handleDeleteFile}
+          onQuizFile={handleOpenQuiz}
         />
 
         {/* 上传按钮 */}
@@ -393,7 +522,73 @@ export function WorkspaceView({
 
       {/* 主内容区 */}
       <div className="flex-1 flex overflow-hidden">
-        {mainView === 'graph' ? (
+        {mainView === 'quiz' ? (
+          /* Quiz视图 */
+          <div className="flex-1 flex overflow-hidden">
+            {quizPhase === 'setup' && (
+              <div className="flex-1 flex overflow-hidden">
+                <QuizSetup
+                  fileName={files.find((f) => f.id === quizFileId)?.name ?? '未知文件'}
+                  onSubmit={handleGenerateQuiz}
+                  onCancel={handleQuizBack}
+                  loading={quizLoading}
+                />
+                {/* 历史Quiz侧边栏 */}
+                {quizHistory.length > 0 && (
+                  <div className="w-56 border-l border-border bg-card p-3 space-y-2 overflow-y-auto">
+                    <h4 className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5">
+                      <History className="w-3 h-3" />
+                      历史测验
+                    </h4>
+                    {quizHistory.map((q) => (
+                      <div
+                        key={q.id}
+                        className="p-2 rounded-lg border border-border hover:border-primary/50 cursor-pointer transition-colors group"
+                        onClick={() => handleLoadHistoryQuiz(q.id)}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="text-xs space-y-0.5">
+                            <div className="font-medium truncate">
+                              {q.keywords.length > 0 ? q.keywords.join('、') : '全部知识点'}
+                            </div>
+                            <div className="text-muted-foreground">
+                              {q.questionCount}题 · {q.difficulty === 'easy' ? '简单' : q.difficulty === 'medium' ? '中等' : '困难'}
+                            </div>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-5 w-5 opacity-0 group-hover:opacity-100 shrink-0"
+                            onClick={(e) => handleDeleteHistoryQuiz(q.id, e)}
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            {quizPhase === 'playing' && (
+              <QuizCard
+                questions={quizQuestions}
+                onComplete={handleQuizComplete}
+                onGoToPage={handleQuizGoToPage}
+                onBack={handleQuizBack}
+              />
+            )}
+            {quizPhase === 'result' && (
+              <QuizResult
+                questions={quizQuestions}
+                answers={quizAnswers}
+                onRetry={handleQuizRetry}
+                onBack={handleQuizBack}
+                onGoToPage={handleQuizGoToPage}
+              />
+            )}
+          </div>
+        ) : mainView === 'graph' ? (
           /* 知识图谱视图 */
           <div className="flex-1 flex flex-col overflow-hidden">
             {/* 顶部栏 */}
@@ -568,17 +763,31 @@ export function WorkspaceView({
                           : '待解析'}
                   </span>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7"
-                  onClick={() => {
-                    onSelectFile(null);
-                    onExpandPage(null);
-                  }}
-                >
-                  <X className="w-4 h-4" />
-                </Button>
+                <div className="flex items-center gap-1">
+                  {/* Quiz按钮 */}
+                  {currentFile.parseStatus === 'done' && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs gap-1"
+                      onClick={() => handleOpenQuiz(currentFileId!)}
+                    >
+                      <Zap className="w-3 h-3" />
+                      Quiz
+                    </Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    onClick={() => {
+                      onSelectFile(null);
+                      onExpandPage(null);
+                    }}
+                  >
+                    <X className="w-4 h-4" />
+                  </Button>
+                </div>
               </div>
 
               {/* 解析进度 */}
