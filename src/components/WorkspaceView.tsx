@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { db } from '@/db';
-import type { FileDocument, PageAnalysis, KnowledgeNode, KnowledgeEdge, Workspace, Quiz, QuizQuestion, QuizDifficulty, QuizSession } from '@/types';
+import type { FileDocument, PageAnalysis, KnowledgeNode, KnowledgeEdge, Workspace, Quiz, QuizQuestion, QuizDifficulty, QuizSession, NodeMastery } from '@/types';
 import { v4 as uuid } from 'uuid';
 import { Button } from '@/components/ui/button';
 import { FileList } from '@/components/FileList';
@@ -14,6 +14,8 @@ import { extractPagesText, buildLightParsePrompt, parseLightParseResult, createP
 import { callLLM } from '@/services/llm';
 import { generateKnowledgeGraph } from '@/services/knowledgeGraph';
 import { generateQuiz, getQuizzesByFile, getQuizQuestions, deleteQuiz } from '@/services/quiz';
+import { mapWrongAnswersToNodes, getWeakNodes, computeLearningPathsV2, getAllMastery } from '@/services/mastery';
+import type { LearningPath } from '@/services/mastery';
 import {
   Upload,
   FileText,
@@ -27,6 +29,8 @@ import {
   Zap,
   History,
   Trash2,
+  AlertTriangle,
+  Route,
 } from 'lucide-react';
 
 interface WorkspaceViewProps {
@@ -114,6 +118,12 @@ export function WorkspaceView({
   const [quizFileId, setQuizFileId] = useState<string | null>(null);
   const [quizHistory, setQuizHistory] = useState<Quiz[]>([]);
 
+  // 薄弱知识点与学习路径状态
+  const [weakNodeIds, setWeakNodeIds] = useState<Set<string>>(new Set());
+  const [learningPaths, setLearningPaths] = useState<LearningPath[]>([]);
+  const [showLearningPath, setShowLearningPath] = useState(false);
+  const [currentQuiz, setCurrentQuiz] = useState<Quiz | null>(null);
+
   // 加载文件列表
   const loadFiles = useCallback(async () => {
     const list = await db.files.where('workspaceId').equals(workspaceId).toArray();
@@ -134,13 +144,27 @@ export function WorkspaceView({
   // 加载已保存的知识图谱
   useEffect(() => {
     async function loadGraph() {
-      const nodes = await db.knowledgeNodes.where('workspaceId').equals(workspaceId).toArray();
-      const edges = await db.knowledgeEdges.where('workspaceId').equals(workspaceId).toArray();
-      setGraphNodes(nodes);
-      setGraphEdges(edges);
+      try {
+        const nodes = await db.knowledgeNodes.where('workspaceId').equals(workspaceId).toArray();
+        const edges = await db.knowledgeEdges.where('workspaceId').equals(workspaceId).toArray();
+        setGraphNodes(nodes);
+        setGraphEdges(edges);
+      } catch (err) {
+        console.error('[Graph] 加载知识图谱失败:', err);
+        setGraphNodes([]);
+        setGraphEdges([]);
+      }
     }
     loadGraph();
   }, [workspaceId]);
+
+  // 加载薄弱知识点数据（图谱数据变化时）
+  useEffect(() => {
+    if (graphNodes.length > 0) {
+      loadWeakNodes();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [graphNodes.length, graphEdges.length]);
 
   // 加载当前文件的解析结果
   useEffect(() => {
@@ -162,6 +186,27 @@ export function WorkspaceView({
     const quizzes = await getQuizzesByFile(fileId);
     setQuizHistory(quizzes);
   }, []);
+
+  // 加载薄弱知识点数据
+  const loadWeakNodes = useCallback(async () => {
+    try {
+      const masteries = await getWeakNodes(workspaceId);
+      const weakIds = new Set(masteries.map((m) => m.nodeId));
+      setWeakNodeIds(weakIds);
+
+      if (weakIds.size > 0 && graphNodes.length > 0) {
+        const allMasteryData = await getAllMastery(workspaceId);
+        const paths = computeLearningPathsV2(graphNodes, graphEdges, weakIds, allMasteryData);
+        setLearningPaths(paths);
+      } else {
+        setLearningPaths([]);
+      }
+    } catch (err) {
+      console.error('[Mastery] 加载薄弱知识点数据失败:', err);
+      setWeakNodeIds(new Set());
+      setLearningPaths([]);
+    }
+  }, [workspaceId, graphNodes, graphEdges]);
 
   // 上传PDF
   const handleUpload = useCallback(
@@ -391,6 +436,7 @@ export function WorkspaceView({
         );
 
         setQuizQuestions(result.questions);
+        setCurrentQuiz(result.quiz);
         setQuizPhase('playing');
         await loadQuizHistory(quizFileId);
       } catch (err) {
@@ -408,6 +454,30 @@ export function WorkspaceView({
     setQuizAnswers(answers);
     setQuizPhase('result');
   }, []);
+
+  // 查看薄弱知识点 — 从Quiz结果跳转到知识图谱
+  const handleViewWeakPoints = useCallback(async () => {
+    if (!currentQuiz || quizQuestions.length === 0) return;
+
+    // 1. 映射错题到知识节点，持久化掌握度数据
+    await mapWrongAnswersToNodes(currentQuiz, quizQuestions, quizAnswers, workspaceId);
+
+    // 2. 重新加载薄弱节点数据
+    const masteries = await getWeakNodes(workspaceId);
+    const weakIds = new Set(masteries.map((m) => m.nodeId));
+    setWeakNodeIds(weakIds);
+
+    // 3. 计算学习路径
+    if (weakIds.size > 0) {
+      const allMasteryData = await getAllMastery(workspaceId);
+      const paths = computeLearningPathsV2(graphNodes, graphEdges, weakIds, allMasteryData);
+      setLearningPaths(paths);
+      setShowLearningPath(true);
+    }
+
+    // 4. 切换到图谱视图
+    setMainView('graph');
+  }, [currentQuiz, quizQuestions, quizAnswers, workspaceId, graphNodes, graphEdges]);
 
   // Quiz重新出题
   const handleQuizRetry = useCallback(() => {
@@ -476,8 +546,29 @@ export function WorkspaceView({
               <span className="text-xs text-muted-foreground shrink-0">
                 ({graphNodes.length}个知识点, {graphEdges.length}条关系)
               </span>
+              {weakNodeIds.size > 0 && (
+                <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400 shrink-0 flex items-center gap-1">
+                  <AlertTriangle className="w-3 h-3" />
+                  {weakNodeIds.size} 个薄弱点
+                </span>
+              )}
             </div>
             <div className="flex items-center gap-2 shrink-0">
+              {weakNodeIds.size === 0 && (
+                <span className="text-[10px] text-muted-foreground hidden sm:inline">
+                  完成测验后可查看学习路径
+                </span>
+              )}
+              <Button
+                variant={showLearningPath ? 'default' : 'outline'}
+                size="sm"
+                className="h-7 text-xs gap-1"
+                onClick={() => setShowLearningPath(!showLearningPath)}
+                disabled={weakNodeIds.size === 0}
+              >
+                <Route className="w-3 h-3" />
+                学习路径
+              </Button>
               <Button
                 variant="outline"
                 size="sm"
@@ -499,6 +590,7 @@ export function WorkspaceView({
                 onClick={() => {
                   setMainView('file');
                   setSelectedNode(null);
+                  setShowLearningPath(false);
                 }}
               >
                 <X className="w-4 h-4" />
@@ -513,9 +605,17 @@ export function WorkspaceView({
               edges={graphEdges}
               onNodeClick={handleNodeClick}
               selectedNode={selectedNode}
-              onNavigateToNode={setSelectedNode}
+              onNavigateToNode={(node) => {
+                setSelectedNode(node);
+                // 点击节点时关闭学习路径面板
+                if (node) setShowLearningPath(false);
+              }}
               onGoToFile={handleNodeGoToFile}
               files={files}
+              weakNodeIds={weakNodeIds}
+              learningPaths={learningPaths}
+              showLearningPath={showLearningPath}
+              onToggleLearningPath={() => setShowLearningPath(!showLearningPath)}
             />
           </div>
         </div>
@@ -726,6 +826,7 @@ export function WorkspaceView({
                 onRetry={handleQuizRetry}
                 onBack={handleQuizBack}
                 onGoToPage={handleQuizGoToPage}
+                onViewWeakPoints={graphNodes.length > 0 ? handleViewWeakPoints : undefined}
               />
             )}
           </div>

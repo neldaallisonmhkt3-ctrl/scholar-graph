@@ -9,6 +9,7 @@ import {
   BookOpen,
   Trophy,
   Target,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface QuizResultProps {
@@ -17,9 +18,11 @@ interface QuizResultProps {
   onRetry: () => void;
   onBack: () => void;
   onGoToPage: (page: number) => void;
+  /** 查看薄弱知识点，跳转到知识图谱 */
+  onViewWeakPoints?: () => void;
 }
 
-export function QuizResult({ questions, answers, onRetry, onBack, onGoToPage }: QuizResultProps) {
+export function QuizResult({ questions, answers, onRetry, onBack, onGoToPage, onViewWeakPoints }: QuizResultProps) {
   const correctCount = answers.reduce((acc, ans, i) => acc + (ans === questions[i].correctIndex ? 1 : 0), 0);
   const accuracy = Math.round((correctCount / questions.length) * 100);
 
@@ -77,15 +80,26 @@ export function QuizResult({ questions, answers, onRetry, onBack, onGoToPage }: 
           </div>
 
           {/* 操作按钮 */}
-          <div className="flex gap-3">
-            <Button variant="outline" className="flex-1 gap-2 h-9" onClick={onRetry}>
-              <RotateCcw className="w-3.5 h-3.5" />
-              重新出题
-            </Button>
-            <Button variant="outline" className="flex-1 gap-2 h-9" onClick={onBack}>
-              <BookOpen className="w-3.5 h-3.5" />
-              返回课件
-            </Button>
+          <div className="space-y-2">
+            {wrongQuestions.length > 0 && onViewWeakPoints && (
+              <Button
+                className="w-full gap-2 h-10 bg-red-500 hover:bg-red-600 text-white"
+                onClick={onViewWeakPoints}
+              >
+                <AlertTriangle className="w-4 h-4" />
+                查看薄弱知识点
+              </Button>
+            )}
+            <div className="flex gap-3">
+              <Button variant="outline" className="flex-1 gap-2 h-9" onClick={onRetry}>
+                <RotateCcw className="w-3.5 h-3.5" />
+                重新出题
+              </Button>
+              <Button variant="outline" className="flex-1 gap-2 h-9" onClick={onBack}>
+                <BookOpen className="w-3.5 h-3.5" />
+                返回课件
+              </Button>
+            </div>
           </div>
 
           {/* 错题回顾 */}

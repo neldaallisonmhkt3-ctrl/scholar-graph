@@ -18,8 +18,8 @@ export const PRESET_PROVIDERS: Omit<ModelProvider, 'id' | 'apiKey'>[] = [
     name: 'DeepSeek',
     provider: 'deepseek',
     baseUrl: 'https://api.deepseek.com/v1',
-    models: ['deepseek-chat', 'deepseek-reasoner'],
-    defaultModel: 'deepseek-chat',
+    models: ['deepseek-v3.2', 'deepseek-chat', 'deepseek-reasoner'],
+    defaultModel: 'deepseek-v3.2',
   },
   {
     name: 'OpenAI',

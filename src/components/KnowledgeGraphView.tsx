@@ -1,7 +1,8 @@
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import * as d3 from 'd3';
 import type { KnowledgeNode, KnowledgeEdge, FileDocument } from '@/types';
-import { X, FileText, ArrowRight, ArrowLeft, Link2, Hash, BookOpen, Layers, ChevronRight, Sparkles } from 'lucide-react';
+import type { LearningPath } from '@/services/mastery';
+import { X, FileText, ArrowRight, ArrowLeft, Link2, Hash, BookOpen, Layers, ChevronRight, Sparkles, Route, AlertTriangle } from 'lucide-react';
 
 interface KnowledgeGraphViewProps {
   nodes: KnowledgeNode[];
@@ -11,6 +12,14 @@ interface KnowledgeGraphViewProps {
   onNavigateToNode?: (node: KnowledgeNode | null) => void;
   onGoToFile?: (node: KnowledgeNode) => void;
   files?: FileDocument[];
+  /** 薄弱知识点节点ID集合 */
+  weakNodeIds?: Set<string>;
+  /** 学习路径数据 */
+  learningPaths?: LearningPath[];
+  /** 是否显示学习路径面板 */
+  showLearningPath?: boolean;
+  /** 切换学习路径面板 */
+  onToggleLearningPath?: () => void;
 }
 
 /** 关系类型对应的颜色 - 更鲜艳、更有区分度 */
@@ -73,6 +82,10 @@ export function KnowledgeGraphView({
   onNavigateToNode,
   onGoToFile,
   files = [],
+  weakNodeIds = new Set(),
+  learningPaths = [],
+  showLearningPath = false,
+  onToggleLearningPath,
 }: KnowledgeGraphViewProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -164,6 +177,19 @@ export function KnowledgeGraphView({
     const selectedMerge = selectedGlowFilter.append('feMerge');
     selectedMerge.append('feMergeNode').attr('in', 'blur');
     selectedMerge.append('feMergeNode').attr('in', 'SourceGraphic');
+
+    // 薄弱节点红色发光 filter
+    const weakGlowFilter = defs.append('filter')
+      .attr('id', 'weak-glow')
+      .attr('x', '-50%').attr('y', '-50%')
+      .attr('width', '200%').attr('height', '200%');
+    weakGlowFilter.append('feGaussianBlur')
+      .attr('in', 'SourceGraphic')
+      .attr('stdDeviation', 5)
+      .attr('result', 'blur');
+    const weakMerge = weakGlowFilter.append('feMerge');
+    weakMerge.append('feMergeNode').attr('in', 'blur');
+    weakMerge.append('feMergeNode').attr('in', 'SourceGraphic');
 
     // 节点阴影
     const shadowFilter = defs.append('filter').attr('id', 'node-shadow');
@@ -277,6 +303,42 @@ export function KnowledgeGraphView({
       .attr('fill-opacity', 0.5)
       .attr('stroke', 'none');
 
+    // 薄弱节点红色脉冲光环（默认隐藏，仅薄弱节点显示）
+    nodeGroup
+      .append('circle')
+      .attr('class', 'graph-node-weak-ring')
+      .attr('r', (d) => getNodeStyle(d, isDark).r + 4)
+      .attr('fill', 'none')
+      .attr('stroke', '#ef4444')
+      .attr('stroke-width', 2)
+      .attr('stroke-dasharray', '4 2')
+      .attr('opacity', 0)
+      .style('display', 'none')
+      .each(function (d) {
+        const baseR = getNodeStyle(d, isDark).r + 4;
+        d3.select(this).append('animate')
+          .attr('attributeName', 'r')
+          .attr('from', baseR)
+          .attr('to', baseR + 12)
+          .attr('dur', '2s')
+          .attr('repeatCount', 'indefinite');
+        d3.select(this).append('animate')
+          .attr('attributeName', 'opacity')
+          .attr('values', '0.8;0.2')
+          .attr('dur', '2s')
+          .attr('repeatCount', 'indefinite');
+      });
+
+    // 薄弱节点红色外圈发光（默认隐藏）
+    nodeGroup
+      .append('circle')
+      .attr('class', 'graph-node-weak-glow')
+      .attr('r', (d) => getNodeStyle(d, isDark).r + 8)
+      .attr('fill', 'rgba(239,68,68,0.15)')
+      .attr('stroke', 'none')
+      .attr('opacity', 0)
+      .style('display', 'none');
+
     // 选中脉冲光环 1（默认隐藏，用 SVG animate 实现脉冲）
     nodeGroup
       .append('circle')
@@ -334,14 +396,26 @@ export function KnowledgeGraphView({
       .append('circle')
       .attr('class', 'graph-node-circle')
       .attr('r', (d) => getNodeStyle(d, isDark).r)
-      .attr('fill', (d) => getNodeStyle(d, isDark).fill)
+      .attr('fill', (d) => {
+        if (weakNodeIds.has(d.id)) {
+          return isDark ? '#f87171' : '#ef4444';
+        }
+        return getNodeStyle(d, isDark).fill;
+      })
       .attr('fill-opacity', 0.9)
-      .attr('stroke', (d) => getNodeStyle(d, isDark).stroke)
+      .attr('stroke', (d) => {
+        if (weakNodeIds.has(d.id)) {
+          return isDark ? '#dc2626' : '#b91c1c';
+        }
+        return getNodeStyle(d, isDark).stroke;
+      })
       .attr('stroke-width', (d) => {
+        if (weakNodeIds.has(d.id)) return 2.5;
         const conn = (d.sourceLinks?.length ?? 0) + (d.targetLinks?.length ?? 0);
         return conn >= 5 ? 2.5 : conn >= 3 ? 2 : 1.5;
       })
       .attr('filter', (d) => {
+        if (weakNodeIds.has(d.id)) return 'url(#weak-glow)';
         const conn = (d.sourceLinks?.length ?? 0) + (d.targetLinks?.length ?? 0);
         return conn >= 3 ? 'url(#node-shadow)' : 'none';
       })
@@ -506,7 +580,7 @@ export function KnowledgeGraphView({
     return () => {
       simulation.stop();
     };
-  }, [nodes, edges, onNodeClick, selectedNode]);
+  }, [nodes, edges, onNodeClick, selectedNode, weakNodeIds]);
 
   useEffect(() => {
     const cleanup = renderGraph();
@@ -635,6 +709,29 @@ export function KnowledgeGraphView({
       .attr('opacity', (d: SimNode) => d.id === selectedId ? null : 0);
   }, [selectedNode, edges]);
 
+  // 薄弱节点视觉效果 effect
+  useEffect(() => {
+    if (!svgRef.current) return;
+    const svg = d3.select(svgRef.current);
+    const weakRing = svg.selectAll<SVGCircleElement, SimNode>('.graph-node-weak-ring');
+    const weakGlow = svg.selectAll<SVGCircleElement, SimNode>('.graph-node-weak-glow');
+
+    if (weakNodeIds.size === 0) {
+      // 没有薄弱节点，全部隐藏
+      weakRing.style('display', 'none').attr('opacity', 0);
+      weakGlow.style('display', 'none').attr('opacity', 0);
+      return;
+    }
+
+    // 显示薄弱节点的红色光环
+    weakRing
+      .style('display', (d: SimNode) => weakNodeIds.has(d.id) ? 'block' : 'none')
+      .attr('opacity', (d: SimNode) => weakNodeIds.has(d.id) ? null : 0);
+    weakGlow
+      .style('display', (d: SimNode) => weakNodeIds.has(d.id) ? 'block' : 'none')
+      .attr('opacity', (d: SimNode) => weakNodeIds.has(d.id) ? 0.6 : 0);
+  }, [weakNodeIds, selectedNode]);
+
   // 监听容器大小变化
   useEffect(() => {
     if (!containerRef.current) return;
@@ -691,8 +788,122 @@ export function KnowledgeGraphView({
             <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: isDarkContext() ? '#64748b' : '#94a3b8' }} />
             <span className="text-muted-foreground text-[11px]">一般</span>
           </div>
+          {weakNodeIds.size > 0 && (
+            <>
+              <div className="border-t border-border/40 pt-1.5 mt-1.5">
+                <div className="font-semibold text-foreground/80 text-[11px]">掌握状态</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: '#ef4444' }} />
+                <span className="text-muted-foreground text-[11px]">薄弱知识点</span>
+              </div>
+            </>
+          )}
         </div>
       </div>
+
+      {/* 学习路径推荐面板 */}
+      {showLearningPath && learningPaths.length > 0 && !selectedNode && (
+        <div className="absolute top-4 right-4 w-[360px] max-h-[calc(100%-32px)] bg-background/90 backdrop-blur-xl border border-border/60 rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+          {/* 标题栏 */}
+          <div className="shrink-0 px-5 pt-4 pb-3 border-b border-border/40">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-6 h-6 rounded-md bg-cyan-100 dark:bg-cyan-900/30 flex items-center justify-center">
+                  <Route className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400" />
+                </div>
+                <span className="text-sm font-semibold text-foreground">学习路径推荐</span>
+              </div>
+              <button
+                className="text-muted-foreground/60 hover:text-foreground transition-colors p-1 rounded-lg hover:bg-accent/60"
+                onClick={onToggleLearningPath}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-[11px] text-muted-foreground/70 mt-1.5">
+              基于测验结果与知识图谱的前置关系，为你推荐最优学习顺序
+            </p>
+          </div>
+
+          {/* 路径列表 */}
+          <div className="flex-1 overflow-y-auto overscroll-contain p-4 space-y-4">
+            {learningPaths.map((path, pathIndex) => (
+              <div key={path.targetNodeId} className="space-y-2.5">
+                {/* 路径标题 */}
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-3.5 h-3.5 text-red-500 shrink-0" />
+                  <span className="text-xs font-semibold text-red-500">
+                    薄弱: {path.targetLabel}
+                  </span>
+                  {path.steps.length > 1 && (
+                    <span className="text-[10px] text-muted-foreground/50 ml-auto">
+                      需{path.steps.length}步
+                    </span>
+                  )}
+                </div>
+
+                {/* 步骤列表 */}
+                <div className="space-y-1.5">
+                  {path.steps.map((step) => (
+                    <button
+                      key={step.nodeId}
+                      className="w-full flex items-center gap-2.5 text-xs px-3 py-2 rounded-lg hover:bg-accent/40 transition-colors text-left group"
+                      onClick={() => {
+                        const node = nodes.find((n) => n.id === step.nodeId);
+                        if (node) onNavigateToNode?.(node);
+                      }}
+                    >
+                      {/* 序号圆点 */}
+                      <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 ${
+                        step.masteryLevel === 'weak'
+                          ? 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400'
+                          : step.masteryLevel === 'mastered'
+                            ? 'bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400'
+                            : 'bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400'
+                      }`}>
+                        {step.order}
+                      </div>
+                      {/* 知识点名称 */}
+                      <span className="truncate flex-1 group-hover:text-primary transition-colors font-medium">
+                        {step.label}
+                      </span>
+                      {/* 掌握状态标签 */}
+                      {step.masteryLevel === 'weak' && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-500 dark:bg-red-900/30 dark:text-red-400 shrink-0">
+                          薄弱
+                        </span>
+                      )}
+                      {step.masteryLevel === 'mastered' && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-500 dark:bg-green-900/30 dark:text-green-400 shrink-0">
+                          已掌握
+                        </span>
+                      )}
+                      {step.masteryLevel === 'learning' && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-500 dark:bg-amber-900/30 dark:text-amber-400 shrink-0">
+                          学习中
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+
+                {/* 路径之间分割线 */}
+                {pathIndex < learningPaths.length - 1 && (
+                  <div className="border-t border-border/30 pt-1" />
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* 底部提示 */}
+          <div className="shrink-0 px-4 py-3 border-t border-border/40 bg-muted/20">
+            <p className="text-[10px] text-muted-foreground/60 leading-relaxed">
+              点击步骤可在图谱中定位对应知识点。按照推荐顺序学习，先掌握前置知识再攻克薄弱点效果更好。
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* 节点详情 - 精致面板 */}
       {selectedNode && (

@@ -101,6 +101,24 @@ export interface KnowledgeGraph {
   createdAt: number;
 }
 
+// ========== 知识掌握度 ==========
+export type MasteryLevel = 'weak' | 'learning' | 'mastered';
+
+export interface NodeMastery {
+  id: string;
+  /** 关联的知识图谱节点ID */
+  nodeId: string;
+  workspaceId: string;
+  masteryLevel: MasteryLevel;
+  /** 产生此状态的测验ID列表 */
+  sourceQuizIds: string[];
+  /** 答错次数 */
+  wrongCount: number;
+  /** 答对次数 */
+  correctCount: number;
+  updatedAt: number;
+}
+
 // ========== 测验 ==========
 export type QuizDifficulty = 'easy' | 'medium' | 'hard';
 

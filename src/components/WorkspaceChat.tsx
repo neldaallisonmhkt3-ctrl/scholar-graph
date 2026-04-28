@@ -225,8 +225,8 @@ export function WorkspaceChat({
           </Button>
         </div>
 
-        <ScrollArea className="flex-1">
-          <div ref={scrollRef} className="p-4 space-y-4 max-w-3xl mx-auto">
+        <ScrollArea className="flex-1" ref={scrollRef}>
+          <div className="p-4 space-y-4 max-w-3xl mx-auto">
             {messages.length === 0 && (
               <div className="text-center py-12">
                 <MessageSquare className="w-10 h-10 text-muted-foreground/30 mx-auto mb-3" />
