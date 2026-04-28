@@ -230,8 +230,8 @@ export function PageDetailPanel({
       )}
 
       {/* 对话区 */}
-      <ScrollArea className="flex-1">
-        <div ref={scrollRef} className="p-4 space-y-4">
+      <ScrollArea className="flex-1" ref={scrollRef}>
+        <div className="p-4 space-y-4">
           {loading && messages.length === 0 && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="w-4 h-4 animate-spin" />
