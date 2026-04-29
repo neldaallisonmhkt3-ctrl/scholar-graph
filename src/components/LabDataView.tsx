@@ -158,9 +158,11 @@ export function LabDataView({ onBack }: LabDataViewProps) {
     const numVal = newValue === '' ? NaN : parseFloat(newValue);
     const vars = [...currentProject.variables];
     const values = [...vars[varIndex].values];
-    if (valueIndex < values.length) {
-      values[valueIndex] = numVal;
+    // 扩展数组到所需长度（新变量values为空时需要填充NaN）
+    while (values.length <= valueIndex) {
+      values.push(NaN);
     }
+    values[valueIndex] = numVal;
     vars[varIndex] = { ...vars[varIndex], values };
     await saveProject({ ...currentProject, variables: vars });
   }, [currentProject, saveProject]);
@@ -504,7 +506,7 @@ export function LabDataView({ onBack }: LabDataViewProps) {
   // 如果没有选中项目，显示项目列表
   if (!currentProjectId) {
     return (
-      <div className="h-full flex flex-col">
+      <div className="flex-1 min-h-0 flex flex-col">
         {/* 顶栏 */}
         <div className="h-14 flex items-center px-4 border-b border-border gap-3 shrink-0">
           <Button variant="ghost" size="sm" onClick={onBack} className="gap-1">
@@ -579,7 +581,7 @@ export function LabDataView({ onBack }: LabDataViewProps) {
   const maxRows = Math.max(...currentProject.variables.map(v => v.values.length), 0);
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="flex-1 min-h-0 flex flex-col">
       {/* 顶栏 */}
       <div className="h-14 flex items-center px-4 border-b border-border gap-3 shrink-0">
         <Button variant="ghost" size="sm" onClick={() => { setCurrentProjectId(null); setCurrentProject(null); }} className="gap-1">
@@ -604,7 +606,7 @@ export function LabDataView({ onBack }: LabDataViewProps) {
         </div>
 
         {/* ===== 数据Tab ===== */}
-        <TabsContent value="data" className="flex-1 overflow-auto px-4 pb-4">
+        <TabsContent value="data" className="flex-1 overflow-auto min-h-0 px-4 pb-4 data-[state=active]:flex data-[state=active]:flex-col">
           {/* 拍照识别 */}
           <div className="flex items-center gap-2 mt-3 mb-4">
             <input
@@ -719,7 +721,7 @@ export function LabDataView({ onBack }: LabDataViewProps) {
         </TabsContent>
 
         {/* ===== 计算Tab ===== */}
-        <TabsContent value="calc" className="flex-1 overflow-auto px-4 pb-4">
+        <TabsContent value="calc" className="flex-1 overflow-auto min-h-0 px-4 pb-4 data-[state=active]:flex data-[state=active]:flex-col">
           {/* 选择变量 */}
           {currentProject.variables.length > 0 && (
             <div className="mt-3 mb-4">
@@ -927,7 +929,7 @@ export function LabDataView({ onBack }: LabDataViewProps) {
         </TabsContent>
 
         {/* ===== 作图Tab ===== */}
-        <TabsContent value="chart" className="flex-1 flex flex-col min-h-0 px-4 pb-4">
+        <TabsContent value="chart" className="flex-1 min-h-0 px-4 pb-4 data-[state=active]:flex data-[state=active]:flex-col">
           {currentProject.variables.length < 2 ? (
             <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
               至少需要2个变量才能作图

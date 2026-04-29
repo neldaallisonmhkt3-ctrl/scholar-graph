@@ -133,6 +133,10 @@ export interface Quiz {
   questionCount: number;
   /** 难度 */
   difficulty: QuizDifficulty;
+  /** 用户答题记录（如果有） */
+  answers?: number[];
+  /** 是否已提交完成 */
+  submitted?: boolean;
   createdAt: number;
 }
 

@@ -14,7 +14,7 @@ import { extractPagesText, buildLightParsePrompt, parseLightParseResult, createP
 import { callLLM } from '@/services/llm';
 import { generateKnowledgeGraph } from '@/services/knowledgeGraph';
 import { generateQuiz, getQuizzesByFile, getQuizQuestions, deleteQuiz } from '@/services/quiz';
-import { mapWrongAnswersToNodes, getWeakNodes, computeLearningPathsV2, getAllMastery } from '@/services/mastery';
+import { mapWrongAnswersToNodes, getWeakNodes, computeLearningPathsV2, getAllMastery, clearMasteryForWorkspace } from '@/services/mastery';
 import type { LearningPath } from '@/services/mastery';
 import {
   Upload,
@@ -352,6 +352,12 @@ export function WorkspaceView({
 
       await db.knowledgeNodes.where('workspaceId').equals(workspaceId).delete();
       await db.knowledgeEdges.where('workspaceId').equals(workspaceId).delete();
+      await clearMasteryForWorkspace(workspaceId);
+
+      // 清空前端薄弱知识点状态（节点ID已失效）
+      setWeakNodeIds(new Set());
+      setLearningPaths([]);
+      setShowLearningPath(false);
 
       const result = await generateKnowledgeGraph(
         workspaceId,
@@ -450,10 +456,18 @@ export function WorkspaceView({
   );
 
   // Quiz答题完成
-  const handleQuizComplete = useCallback((answers: number[]) => {
+  const handleQuizComplete = useCallback(async (answers: number[]) => {
     setQuizAnswers(answers);
     setQuizPhase('result');
-  }, []);
+    // 保存答题记录到当前测验
+    if (currentQuiz) {
+      const updated = { ...currentQuiz, answers, submitted: true };
+      await db.quizzes.put(updated);
+      setCurrentQuiz(updated);
+      // 刷新历史列表以显示最新状态
+      if (quizFileId) await loadQuizHistory(quizFileId);
+    }
+  }, [currentQuiz, quizFileId, loadQuizHistory]);
 
   // 查看薄弱知识点 — 从Quiz结果跳转到知识图谱
   const handleViewWeakPoints = useCallback(async () => {
@@ -508,10 +522,20 @@ export function WorkspaceView({
 
   // 加载历史Quiz
   const handleLoadHistoryQuiz = useCallback(async (quizId: string) => {
+    const quiz = await db.quizzes.get(quizId);
     const questions = await getQuizQuestions(quizId);
     if (questions.length > 0) {
       setQuizQuestions(questions);
-      setQuizPhase('playing');
+      setCurrentQuiz(quiz ?? null);
+      if (quiz?.submitted && quiz.answers && quiz.answers.length > 0) {
+        // 已完成的测验：恢复到结果页，显示答题记录
+        setQuizAnswers(quiz.answers);
+        setQuizPhase('result');
+      } else {
+        // 未完成的测验：从头开始
+        setQuizAnswers([]);
+        setQuizPhase('playing');
+      }
     }
   }, []);
 
@@ -791,6 +815,11 @@ export function WorkspaceView({
                           <div className="text-xs space-y-0.5 min-w-0">
                             <div className="font-medium truncate">
                               {q.keywords.length > 0 ? q.keywords.join('、') : '全部知识点'}
+                              {q.submitted && (
+                                <span className="ml-1.5 text-[10px] px-1 py-0.5 rounded bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">
+                                  已完成
+                                </span>
+                              )}
                             </div>
                             <div className="text-muted-foreground">
                               {q.questionCount}题 · {q.difficulty === 'easy' ? '简单' : q.difficulty === 'medium' ? '中等' : '困难'}
