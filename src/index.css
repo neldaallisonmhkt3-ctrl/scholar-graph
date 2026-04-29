@@ -69,6 +69,9 @@
   * {
     @apply border-border;
   }
+  html {
+    font-size: 17px;
+  }
   body {
     @apply bg-background text-foreground;
   }

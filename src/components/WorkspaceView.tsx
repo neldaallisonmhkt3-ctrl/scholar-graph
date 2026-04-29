@@ -321,6 +321,72 @@ export function WorkspaceView({
     [currentFileId, onSelectFile, onExpandPage, loadFiles]
   );
 
+  // 重试解析失败的文件
+  const handleRetryParse = useCallback(
+    async (fileId: string) => {
+      const fileDoc = await db.files.get(fileId);
+      if (!fileDoc) return;
+      const blobRecord = await db.fileBlobs.where('fileId').equals(fileId).first();
+      if (!blobRecord) return;
+
+      // 清除旧的解析结果
+      await db.pageAnalyses.where('fileId').equals(fileId).delete();
+      await db.files.update(fileId, { parseStatus: 'parsing', pageCount: 0 });
+      await loadFiles();
+      onSelectFile(fileId);
+
+      setParsing(true);
+      try {
+        const { pageCount, pages } = await extractPagesText(blobRecord.blob);
+        await db.files.update(fileId, { pageCount });
+        setParseProgress({ current: 0, total: pages.length });
+
+        const providers = await db.modelProviders.toArray();
+        const activeProvider = providers[0];
+
+        for (let i = 0; i < pages.length; i++) {
+          const page = pages[i];
+          setParseProgress({ current: i + 1, total: pages.length });
+
+          let keywords: string[] = [];
+          let summary = '';
+
+          if (page.text.trim() && activeProvider?.apiKey) {
+            try {
+              const prompt = buildLightParsePrompt(page.pageNumber, page.text);
+              const response = await callLLM(activeProvider, [
+                { role: 'user', content: prompt },
+              ], { temperature: 0.3, maxTokens: 256 });
+              const parsed = parseLightParseResult(response.content);
+              keywords = parsed.keywords;
+              summary = parsed.summary;
+            } catch {
+              summary = page.text.slice(0, 30) + '...';
+            }
+          } else {
+            summary = page.text.trim() ? page.text.slice(0, 30) + '...' : '（无文字内容）';
+          }
+
+          const analysis = createPageAnalysis(fileId, workspaceId, page.pageNumber, page.text, keywords, summary);
+          await db.pageAnalyses.add(analysis);
+        }
+
+        await db.files.update(fileId, { parseStatus: 'done' });
+        await loadFiles();
+        const analyses = await db.pageAnalyses.where('fileId').equals(fileId).sortBy('pageNumber');
+        setPageAnalyses(analyses);
+      } catch (err) {
+        console.error('重试解析失败:', err);
+        await db.files.update(fileId, { parseStatus: 'error' });
+        await loadFiles();
+      } finally {
+        setParsing(false);
+        setParseProgress({ current: 0, total: 0 });
+      }
+    },
+    [workspaceId, loadFiles, onSelectFile]
+  );
+
   // 生成知识图谱
   const handleGenerateGraph = useCallback(async () => {
     const providers = await db.modelProviders.toArray();
@@ -567,8 +633,11 @@ export function WorkspaceView({
               <span className="text-sm font-medium truncate">
                 {workspaceName} - 知识图谱
               </span>
-              <span className="text-xs text-muted-foreground shrink-0">
-                ({graphNodes.length}个知识点, {graphEdges.length}条关系)
+              <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400 shrink-0">
+                {graphNodes.length} 知识点
+              </span>
+              <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400 shrink-0">
+                {graphEdges.length} 关系
               </span>
               {weakNodeIds.size > 0 && (
                 <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400 shrink-0 flex items-center gap-1">
@@ -666,6 +735,7 @@ export function WorkspaceView({
           }}
           onDeleteFile={handleDeleteFile}
           onQuizFile={handleOpenQuiz}
+          onRetryParse={handleRetryParse}
         />
 
         {/* 上传按钮 */}
@@ -775,14 +845,19 @@ export function WorkspaceView({
         onMouseDown={handleFileListMouseDown}
         className={`
           w-1.5 shrink-0 cursor-col-resize 
-          bg-border hover:bg-primary/40 
+          hover:w-2 hover:bg-primary/30
           flex items-center justify-center
-          transition-colors
-          ${isFileListDragging ? 'bg-primary/60' : ''}
+          transition-all duration-150
+          ${isFileListDragging ? 'w-2.5 bg-primary/50' : 'bg-border'}
         `}
         style={{ zIndex: 50 }}
       >
-        <div className={`h-8 w-1 rounded-full bg-muted-foreground/30 ${isFileListDragging ? 'bg-primary/60' : ''}`} />
+        <div className={`h-8 w-1 rounded-full transition-all duration-150 ${isFileListDragging ? 'bg-primary/70 scale-y-125' : 'bg-muted-foreground/20 hover:bg-primary/40'}`} />
+        {isFileListDragging && (
+          <div className="absolute top-1/2 -translate-y-1/2 left-1/2 translate-x-1/2 bg-primary text-primary-foreground text-[10px] px-1.5 py-0.5 rounded shadow-lg whitespace-nowrap z-50">
+            {fileListWidth}px
+          </div>
+        )}
       </div>
 
       {/* 主内容区 */}

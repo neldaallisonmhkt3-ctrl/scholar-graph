@@ -25,19 +25,19 @@ export function QuizSetup({ fileName, onSubmit, onCancel, loading }: QuizSetupPr
   const [difficulty, setDifficulty] = useState<QuizDifficulty>('medium');
 
   const handleStart = () => {
-    const keywords = keywordInput
+    const kws = keywordInput
       .split(/[,，、\s]+/)
       .map((k) => k.trim())
       .filter(Boolean);
-    onSubmit(keywords, questionCount, difficulty);
+    onSubmit(kws, questionCount, difficulty);
   };
 
   return (
     <div className="flex-1 flex items-center justify-center p-6">
-      <div className="w-full max-w-md space-y-6">
+      <div className="w-full max-w-lg rounded-xl border bg-card p-8 shadow-sm space-y-7">
         {/* 标题 */}
-        <div className="text-center space-y-1">
-          <h2 className="text-lg font-semibold">开始测验</h2>
+        <div className="text-center space-y-1.5">
+          <h2 className="text-xl font-semibold tracking-tight">开始测验</h2>
           <p className="text-sm text-muted-foreground">{fileName}</p>
         </div>
 
@@ -48,7 +48,7 @@ export function QuizSetup({ fileName, onSubmit, onCancel, loading }: QuizSetupPr
             placeholder="输入关键词，用逗号分隔（留空则覆盖全部）"
             value={keywordInput}
             onChange={(e) => setKeywordInput(e.target.value)}
-            className="h-9 text-sm"
+            className="h-10 text-sm"
           />
           <p className="text-xs text-muted-foreground">
             如：二叉树、排序算法、时间复杂度
@@ -58,13 +58,13 @@ export function QuizSetup({ fileName, onSubmit, onCancel, loading }: QuizSetupPr
         {/* 题目数量 */}
         <div className="space-y-2">
           <label className="text-sm font-medium">题目数量</label>
-          <div className="flex gap-2">
+          <div className="flex gap-3">
             {COUNT_OPTIONS.map((count) => (
               <Button
                 key={count}
                 variant={questionCount === count ? 'default' : 'outline'}
                 size="sm"
-                className="flex-1 h-9"
+                className="flex-1 h-10 text-sm"
                 onClick={() => setQuestionCount(count)}
               >
                 {count} 题
@@ -76,48 +76,48 @@ export function QuizSetup({ fileName, onSubmit, onCancel, loading }: QuizSetupPr
         {/* 难度选择 */}
         <div className="space-y-2">
           <label className="text-sm font-medium">难度</label>
-          <div className="flex gap-2">
+          <div className="grid grid-cols-3 gap-3">
             {DIFFICULTY_OPTIONS.map((opt) => (
               <Button
                 key={opt.value}
                 variant={difficulty === opt.value ? 'default' : 'outline'}
                 size="sm"
-                className="flex-1 h-auto py-2 flex-col gap-0.5"
+                className={`h-auto py-3 flex-col gap-1 ${difficulty === opt.value ? 'ring-2 ring-primary/20' : ''}`}
                 onClick={() => setDifficulty(opt.value)}
               >
                 {opt.icon}
-                <span className="text-xs">{opt.label}</span>
+                <span className="text-sm font-medium">{opt.label}</span>
+                <span className={`text-[11px] ${difficulty === opt.value ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
+                  {opt.desc}
+                </span>
               </Button>
             ))}
           </div>
-          <p className="text-xs text-muted-foreground text-center">
-            {DIFFICULTY_OPTIONS.find((d) => d.value === difficulty)?.desc}
-          </p>
         </div>
 
         {/* 操作按钮 */}
-        <div className="flex gap-3 pt-2">
+        <div className="flex gap-3 pt-1">
           <Button
             variant="outline"
-            className="flex-1 h-9"
+            className="flex-1 h-10"
             onClick={onCancel}
             disabled={loading}
           >
             取消
           </Button>
           <Button
-            className="flex-1 h-9 gap-2"
+            className="flex-1 h-10 gap-2"
             onClick={handleStart}
             disabled={loading}
           >
             {loading ? (
               <>
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <Loader2 className="w-4 h-4 animate-spin" />
                 出题中...
               </>
             ) : (
               <>
-                <Zap className="w-3.5 h-3.5" />
+                <Zap className="w-4 h-4" />
                 开始出题
               </>
             )}

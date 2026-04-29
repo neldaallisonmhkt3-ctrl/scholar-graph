@@ -13,9 +13,16 @@ import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
   Plus, Trash2, Camera, Calculator, LineChart as LineChartIcon,
   Save, Download, ChevronDown, ChevronRight, FlaskConical, X,
-  FileText, Copy, RotateCcw
+  FileText, Copy, RotateCcw, CheckCircle2
 } from 'lucide-react';
 
 // ========== ECharts 动态导入 ==========
@@ -152,20 +159,37 @@ export function LabDataView({ onBack }: LabDataViewProps) {
     setNewVarName('');
   }, [currentProject, newVarName, saveProject]);
 
-  // ========== 修改变量值 ==========
-  const handleValueChange = useCallback(async (varIndex: number, valueIndex: number, newValue: string) => {
-    if (!currentProject) return;
+  // ========== 修改变量值（失焦保存，避免频繁写IndexedDB） ==========
+  const [pendingValues, setPendingValues] = useState<Record<string, string>>({});
+
+  const handleValueChange = useCallback((varIndex: number, valueIndex: number, newValue: string) => {
+    // 只更新本地状态，不写DB
+    setPendingValues(prev => ({ ...prev, [`${varIndex}-${valueIndex}`]: newValue }));
+  }, []);
+
+  const handleValueBlur = useCallback(async (varIndex: number, valueIndex: number) => {
+    const key = `${varIndex}-${valueIndex}`;
+    const newValue = pendingValues[key];
+    if (newValue === undefined || !currentProject) return;
+    // 清除本地缓存
+    setPendingValues(prev => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
     const numVal = newValue === '' ? NaN : parseFloat(newValue);
+    const currentVal = currentProject.variables[varIndex]?.values[valueIndex];
+    // 值没变则跳过保存
+    if (currentVal === numVal || (isNaN(currentVal) && isNaN(numVal))) return;
     const vars = [...currentProject.variables];
     const values = [...vars[varIndex].values];
-    // 扩展数组到所需长度（新变量values为空时需要填充NaN）
     while (values.length <= valueIndex) {
       values.push(NaN);
     }
     values[valueIndex] = numVal;
     vars[varIndex] = { ...vars[varIndex], values };
     await saveProject({ ...currentProject, variables: vars });
-  }, [currentProject, saveProject]);
+  }, [currentProject, pendingValues, saveProject]);
 
   // ========== 添加数据行 ==========
   const handleAddRow = useCallback(async () => {
@@ -497,9 +521,12 @@ export function LabDataView({ onBack }: LabDataViewProps) {
   }, [currentProject]);
 
   // ========== 复制计算过程 ==========
+  const [copyFeedback, setCopyFeedback] = useState(false);
   const handleCopyProcess = useCallback(() => {
     const text = calcResults.map(r => `${r.displayName}:\n${r.process}\n结果: ${fmt(r.value)}\n`).join('\n');
     navigator.clipboard.writeText(text);
+    setCopyFeedback(true);
+    setTimeout(() => setCopyFeedback(false), 2000);
   }, [calcResults]);
 
   // ========== 渲染 ==========
@@ -522,8 +549,12 @@ export function LabDataView({ onBack }: LabDataViewProps) {
 
             {/* 项目列表 */}
             {projects.length === 0 ? (
-              <div className="text-muted-foreground text-sm text-center py-12">
-                还没有实验项目，点击下方新建
+              <div className="flex flex-col items-center justify-center py-16 text-center">
+                <div className="w-16 h-16 rounded-2xl bg-primary/8 flex items-center justify-center mb-4">
+                  <FlaskConical className="w-8 h-8 text-primary/40" />
+                </div>
+                <p className="text-sm font-medium text-muted-foreground">还没有实验项目</p>
+                <p className="text-xs text-muted-foreground/60 mt-1">点击下方「新建实验项目」开始录入数据</p>
               </div>
             ) : (
               <div className="space-y-2 mb-4">
@@ -659,9 +690,11 @@ export function LabDataView({ onBack }: LabDataViewProps) {
                           <input
                             type="number"
                             step="any"
-                            value={isNaN(v.values[ri]) ? '' : v.values[ri]}
+                            value={pendingValues[`${vi}-${ri}`] ?? (isNaN(v.values[ri]) ? '' : v.values[ri])}
                             onChange={e => handleValueChange(vi, ri, e.target.value)}
-                            className="w-full px-2 py-1 text-sm bg-transparent border border-transparent hover:border-border focus:border-primary rounded outline-none transition-colors"
+                            onBlur={() => handleValueBlur(vi, ri)}
+                            className={`w-full px-2 py-1 text-sm bg-transparent border border-transparent hover:border-border focus:border-primary rounded outline-none transition-colors ${isNaN(v.values[ri]) && !pendingValues[`${vi}-${ri}`] ? 'border-dashed border-muted-foreground/20' : ''}`}
+                            placeholder="-"
                           />
                         </td>
                       ))}
@@ -906,7 +939,11 @@ export function LabDataView({ onBack }: LabDataViewProps) {
                 <div className="text-xs text-muted-foreground font-medium">计算结果</div>
                 <div className="flex gap-1">
                   <Button size="sm" variant="ghost" className="h-6 text-xs gap-1" onClick={handleCopyProcess}>
-                    <Copy className="w-3 h-3" />复制
+                    {copyFeedback ? (
+                      <><CheckCircle2 className="w-3 h-3 text-green-500" />已复制</>
+                    ) : (
+                      <><Copy className="w-3 h-3" />复制</>
+                    )}
                   </Button>
                   <Button size="sm" variant="ghost" className="h-6 text-xs gap-1" onClick={handleClearResults}>
                     <RotateCcw className="w-3 h-3" />清除
@@ -940,54 +977,56 @@ export function LabDataView({ onBack }: LabDataViewProps) {
               <div className="mt-3 mb-3 flex flex-wrap items-center gap-3 shrink-0">
                 <div className="flex items-center gap-1.5">
                   <span className="text-xs text-muted-foreground">X轴:</span>
-                  <select
-                    value={chartXVar}
-                    onChange={e => setChartXVar(e.target.value)}
-                    className="h-7 px-2 text-xs border border-border rounded bg-background outline-none"
-                  >
-                    <option value="">选择变量</option>
-                    {currentProject.variables.map((v, i) => (
-                      <option key={i} value={v.name}>{v.name}</option>
-                    ))}
-                  </select>
+                  <Select value={chartXVar || undefined} onValueChange={setChartXVar}>
+                    <SelectTrigger className="h-7 text-xs w-28">
+                      <SelectValue placeholder="选择变量" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {currentProject.variables.map((v, i) => (
+                        <SelectItem key={i} value={v.name}>{v.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="flex items-center gap-1.5">
                   <span className="text-xs text-muted-foreground">Y轴:</span>
-                  <select
-                    value={chartYVar}
-                    onChange={e => setChartYVar(e.target.value)}
-                    className="h-7 px-2 text-xs border border-border rounded bg-background outline-none"
-                  >
-                    <option value="">选择变量</option>
-                    {currentProject.variables.map((v, i) => (
-                      <option key={i} value={v.name}>{v.name}</option>
-                    ))}
-                  </select>
+                  <Select value={chartYVar || undefined} onValueChange={setChartYVar}>
+                    <SelectTrigger className="h-7 text-xs w-28">
+                      <SelectValue placeholder="选择变量" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {currentProject.variables.map((v, i) => (
+                        <SelectItem key={i} value={v.name}>{v.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="flex items-center gap-1.5">
                   <span className="text-xs text-muted-foreground">图表:</span>
-                  <select
-                    value={chartType}
-                    onChange={e => setChartType(e.target.value as 'scatter' | 'line' | 'polar')}
-                    className="h-7 px-2 text-xs border border-border rounded bg-background outline-none"
-                  >
-                    <option value="scatter">散点图</option>
-                    <option value="line">折线图</option>
-                    <option value="polar">极坐标</option>
-                  </select>
+                  <Select value={chartType} onValueChange={v => setChartType(v as 'scatter' | 'line' | 'polar')}>
+                    <SelectTrigger className="h-7 text-xs w-24">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="scatter">散点图</SelectItem>
+                      <SelectItem value="line">折线图</SelectItem>
+                      <SelectItem value="polar">极坐标</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="flex items-center gap-1.5">
                   <span className="text-xs text-muted-foreground">拟合:</span>
-                  <select
-                    value={chartFitType}
-                    onChange={e => setChartFitType(e.target.value as 'none' | 'linear' | 'quadratic' | 'cubic')}
-                    className="h-7 px-2 text-xs border border-border rounded bg-background outline-none"
-                  >
-                    <option value="none">无</option>
-                    <option value="linear">线性</option>
-                    <option value="quadratic">二次</option>
-                    <option value="cubic">三次</option>
-                  </select>
+                  <Select value={chartFitType} onValueChange={v => setChartFitType(v as 'none' | 'linear' | 'quadratic' | 'cubic')}>
+                    <SelectTrigger className="h-7 text-xs w-20">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">无</SelectItem>
+                      <SelectItem value="linear">线性</SelectItem>
+                      <SelectItem value="quadratic">二次</SelectItem>
+                      <SelectItem value="cubic">三次</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <Button
                   size="sm"

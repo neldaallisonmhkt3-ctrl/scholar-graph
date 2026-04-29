@@ -12,6 +12,41 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 
+/** SVG 环形进度图 */
+function RingProgress({ value, size = 120, strokeWidth = 8, color }: { value: number; size?: number; strokeWidth?: number; color: string }) {
+  const radius = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference - (value / 100) * circumference;
+
+  return (
+    <svg width={size} height={size} className="transform -rotate-90">
+      {/* 背景环 */}
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={radius}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={strokeWidth}
+        className="text-muted/30"
+      />
+      {/* 进度环 */}
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={radius}
+        fill="none"
+        stroke={color}
+        strokeWidth={strokeWidth}
+        strokeLinecap="round"
+        strokeDasharray={circumference}
+        strokeDashoffset={offset}
+        className="transition-[stroke-dashoffset] duration-700 ease-out"
+      />
+    </svg>
+  );
+}
+
 interface QuizResultProps {
   questions: QuizQuestion[];
   answers: number[];
@@ -28,10 +63,10 @@ export function QuizResult({ questions, answers, onRetry, onBack, onGoToPage, on
 
   // 评级
   const getGrade = () => {
-    if (accuracy >= 90) return { label: '优秀', color: 'text-green-600', emoji: '🏆' };
-    if (accuracy >= 70) return { label: '良好', color: 'text-blue-600', emoji: '👍' };
-    if (accuracy >= 50) return { label: '及格', color: 'text-amber-600', emoji: '📝' };
-    return { label: '需加强', color: 'text-red-600', emoji: '💪' };
+    if (accuracy >= 90) return { label: '优秀', color: 'text-green-600', ring: '#16a34a' };
+    if (accuracy >= 70) return { label: '良好', color: 'text-blue-600', ring: '#2563eb' };
+    if (accuracy >= 50) return { label: '及格', color: 'text-amber-600', ring: '#d97706' };
+    return { label: '需加强', color: 'text-red-600', ring: '#dc2626' };
   };
 
   const grade = getGrade();
@@ -55,10 +90,13 @@ export function QuizResult({ questions, answers, onRetry, onBack, onGoToPage, on
         <div className="max-w-lg mx-auto space-y-6">
           {/* 成绩概览 */}
           <div className="text-center space-y-4 py-4">
-            <div className="text-4xl">{grade.emoji}</div>
-            <div>
-              <div className={`text-3xl font-bold ${grade.color}`}>{accuracy}%</div>
-              <div className={`text-sm font-medium ${grade.color}`}>{grade.label}</div>
+            {/* 环形进度图 */}
+            <div className="relative inline-flex items-center justify-center">
+              <RingProgress value={accuracy} size={120} strokeWidth={8} color={grade.ring} />
+              <div className="absolute inset-0 flex flex-col items-center justify-center">
+                <div className={`text-2xl font-bold ${grade.color}`}>{accuracy}%</div>
+                <div className={`text-xs font-medium ${grade.color}`}>{grade.label}</div>
+              </div>
             </div>
 
             <div className="flex justify-center gap-6">

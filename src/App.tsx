@@ -120,17 +120,23 @@ function App() {
         onMouseDown={handleMouseDown}
         className={`
           w-1.5 shrink-0 cursor-col-resize 
-          bg-border hover:bg-primary/40 
+          hover:w-2 hover:bg-primary/30
           flex items-center justify-center
-          transition-colors
-          ${isDragging ? 'bg-primary/60' : ''}
+          transition-all duration-150
+          ${isDragging ? 'w-2.5 bg-primary/50' : 'bg-border'}
         `}
         style={{ zIndex: 50 }}
       >
         <div className={`
-          h-8 w-1 rounded-full bg-muted-foreground/30
-          ${isDragging ? 'bg-primary/60' : ''}
+          h-8 w-1 rounded-full transition-all duration-150
+          ${isDragging ? 'bg-primary/70 scale-y-125' : 'bg-muted-foreground/20 hover:bg-primary/40'}
         `} />
+        {/* 拖拽时显示宽度 */}
+        {isDragging && (
+          <div className="absolute top-1/2 -translate-y-1/2 left-1/2 translate-x-1/2 bg-primary text-primary-foreground text-[10px] px-1.5 py-0.5 rounded shadow-lg whitespace-nowrap z-50">
+            {sidebarWidth}px
+          </div>
+        )}
       </div>
 
       {/* 主内容区 */}
@@ -151,7 +157,7 @@ function App() {
             onOpenWorkspaceChat={handleOpenWorkspaceChat}
           />
         ) : (
-          <WelcomeScreen />
+          <WelcomeScreen onOpenLab={() => setAppState((p) => ({ ...p, view: 'lab' }))} />
         )}
       </div>
     </div>

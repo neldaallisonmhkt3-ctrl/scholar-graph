@@ -119,7 +119,7 @@ export function Sidebar({ currentWorkspaceId, currentView, onSelectWorkspace, on
         {/* 实验数据处理入口 */}
         <Button
           variant={currentView === 'lab' ? 'secondary' : 'ghost'}
-          className={`w-full justify-start gap-2 text-sm ${currentView === 'lab' ? 'bg-primary/10 text-primary' : ''}`}
+          className={`w-full justify-start gap-2 text-sm border-l-2 ${currentView === 'lab' ? 'border-l-primary bg-primary/10 text-primary font-medium' : 'border-l-transparent hover:border-l-primary/30'}`}
           onClick={onOpenLab}
         >
           <FlaskConical className="w-4 h-4" />
