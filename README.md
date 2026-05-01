@@ -1,55 +1,79 @@
-# 智学图谱 ScholarGraph
+# 智学图谱 Scholar-Graph
 
-> AI课程学习与科研双赋能助手 —— 天津大学人工智能创新应用案例
+> 基于知识图谱与大模型的课程学习与实验数据处理平台 —— 天津大学人工智能创新应用案例
 
-## 产品概述
+## 产品简介
 
-智学图谱是一款面向本科生的**基于知识图谱 + RAG**的课程学习与科研入门双赋能平台。通过知识图谱可视化、苏格拉底式AI辅导和科研文献探索三大核心模块，实现"学-问-研"三位一体的学习闭环。
+智学图谱是一款面向本科生的**知识图谱 + 大模型**驱动的课程学习与实验数据处理平台。上传课件 PDF 即可自动解析，通过 AI 逐页讲解与追问、自动生成知识图谱和测验，同时提供完整的实验数据处理工具（公式计算、数据作图、拍照识别），实现"学-问-测-算"一体化的学习闭环。
+
+**在线体验**：[https://neldaallisonmhkt3-ctrl.github.io/scholar-graph/](https://neldaallisonmhkt3-ctrl.github.io/scholar-graph/)
+
+---
 
 ## 核心功能
 
-### 1. 知识图谱可视化学习导航
-- 以《数据结构》课程为试点，构建35个知识点、40条关联关系的知识网络
-- 支持按难度等级、知识类别筛选
-- 节点颜色标识掌握度（绿色≥80%、红色<50%）
-- 点击节点查看概念详解与学习建议
+### 📚 PDF 课件解析与 AI 讲解
+- 上传 PDF 课件，逐页自动提取关键词与摘要
+- 点击任意页面展开 AI 深度讲解
+- 支持追问，AI 基于当前页面上下文回答
+- 5 家大模型 API 可选：DeepSeek / OpenAI / Claude / Gemini / 智谱
 
-### 2. 苏格拉底式RAG智能问答
-- 不直接给答案，通过提问引导自主思考
-- 基于教材内容的RAG检索增强（16个教材片段）
-- 回答附带引用来源标注
-- 支持DeepSeek/硅基流动/OpenAI API接入
-- 无API Key时自动切换演示模式
+### 🕸️ 知识图谱
+- 一键从已解析 PDF 中提取知识点与关系
+- D3.js 力导向图可视化，仿 Obsidian 风格
+- 节点支持拖拽、缩放、悬停描述、点击查看详情
+- 6 种关系类型：包含 / 依赖于 / 推导出 / 对比 / 应用 / 前置知识
+- 右侧详情面板显示描述、来源文件、相关关系
+- 新增 PDF 后可刷新图谱，自动合并新知识
 
-### 3. 科研文献探索
-- 对接Semantic Scholar API（免费）
-- 输入研究方向关键词检索全球学术论文
-- 文献影响力与时效性可视化评估
-- 一键跳转PDF原文
+### 📝 Quiz 测验
+- 每个已解析 PDF 可生成测验，仿 Gemini 闪卡风格
+- 支持关键词筛选、题数（5/10/15）、难度（简单/中等/困难）
+- 闪卡式逐题答题：选项点击 → 揭晓 → 解析 → 提示
+- 答题结果：正确率、评级、错题回顾
+- 扩展题标记（超出 PDF 范围的知识）
+- 来源页跳转，历史测验管理
 
-### 4. 学习仪表盘
-- 六维知识掌握度雷达图
-- 周学习活动柱状图
-- 薄弱知识点识别与推荐学习路径
-- 学习时长与问答互动统计
+### 🧪 实验数据处理
+- **数据输入**：手动建表 + 拍照识别（LLM 视觉，支持 Gemini/Claude/OpenAI）
+- **预设公式**：x̄、S、uA、uB、u、ur（一键计算，含完整过程文本）
+- **模板公式**：圆柱体积、空心圆柱、单摆测 g、电阻伏安法、密度
+- **自定义公式**：math.js 解析，支持 `{varName}` 变量引用，可保存复用
+- **作图**：ECharts 散点/折线/极坐标 + 线性/二次/三次拟合 + R²
+- **导出**：CSV 数据 + PNG 图表 + 复制计算过程
+
+---
 
 ## 技术架构
 
 | 层级 | 技术选型 |
 |------|---------|
-| 前端框架 | React 18 + TypeScript |
+| 前端框架 | React 19 + TypeScript |
 | 构建工具 | Vite |
-| UI组件 | Tailwind CSS + shadcn/ui |
-| 图谱可视化 | Cytoscape.js |
-| 图表 | Recharts |
-| 大模型API | DeepSeek / 硅基流动 / OpenAI |
-| 文献API | Semantic Scholar API |
-| 数据持久化 | 浏览器 localStorage |
+| UI 组件 | Tailwind CSS + shadcn/ui |
+| 知识图谱 | D3.js 力导向图 |
+| 图表可视化 | ECharts |
+| PDF 解析 | pdfjs-dist |
+| 公式计算 | math.js |
+| 数据存储 | Dexie.js (IndexedDB) |
+| 大模型 API | DeepSeek / OpenAI / Claude / Gemini / 智谱 |
+
+---
 
 ## 快速开始
 
+### 在线使用
+
+直接访问 [GitHub Pages](https://neldaallisonmhkt3-ctrl.github.io/scholar-graph/) 即可使用，无需安装任何软件。
+
+### 本地运行
+
 ```bash
-# 安装依赖
+# 克隆仓库
+git clone https://github.com/neldaallisonmhkt3-ctrl/scholar-graph.git
+cd scholar-graph
+
+# 安装依赖（需 Node.js 18+）
 npm install
 
 # 开发模式
@@ -59,65 +83,78 @@ npm run dev
 npm run build
 ```
 
-构建完成后，`dist/` 目录即为可部署的静态文件。
+### AI 模型配置
 
-## API配置
+首次使用需在"设置"页面配置至少一个大模型 API Key：
 
-在"设置"页面配置大模型API Key：
+| 模型 | 获取地址 |
+|------|---------|
+| DeepSeek | https://platform.deepseek.com |
+| OpenAI | https://platform.openai.com |
+| Claude | https://console.anthropic.com |
+| Gemini | https://aistudio.google.com |
+| 智谱 | https://open.bigmodel.cn |
 
-- **DeepSeek**: https://platform.deepseek.com
-- **硅基流动**: https://cloud.siliconflow.cn
-- **OpenAI**: https://platform.openai.com
+API Key 仅存储在本地浏览器 IndexedDB 中，不会上传到任何服务器。
 
-API Key仅存储在本地浏览器中，不会上传到任何服务器。
+---
 
 ## 项目结构
 
 ```
 src/
   components/
-    ui/              # shadcn/ui 基础组件
-    KnowledgeGraph.tsx    # 知识图谱可视化
-    ChatAssistant.tsx     # AI辅导问答
-    LiteratureExplorer.tsx # 文献探索
-    Dashboard.tsx         # 学习仪表盘
-    SettingsPanel.tsx     # 设置面板
-  data/
-    course-data.ts   # 课程知识图谱数据
-    prompts.ts       # AI Prompt模板
-  hooks/
-    use-local-storage.ts  # localStorage Hook
-  types/
-    index.ts         # TypeScript类型定义
-  App.tsx            # 主应用组件
-  main.tsx           # 入口文件
+    ui/                     # shadcn/ui 基础组件
+    KnowledgeGraph/         # 知识图谱（D3.js 力导向图）
+    Quiz/                   # Quiz 测验（闪卡式）
+    LabCalc/                # 实验数据计算
+    LabOcr/                 # 拍照识别
+    SettingsPanel.tsx       # 设置面板
+    Sidebar.tsx             # 侧边栏
+  services/
+    llm.ts                  # LLM API 统一网关
+    pdf.ts                  # PDF 解析管线
+    knowledgeGraph.ts       # 知识图谱生成
+    quiz.ts                 # 测验生成
+    labCalc.ts              # 实验公式计算
+    labOcr.ts               # OCR 识别
+  db/
+    index.ts                # Dexie 数据库定义
+  App.tsx                   # 主应用组件
+  main.tsx                  # 入口文件
 ```
 
-## 创新点
+---
 
-1. **知识图谱 + 大模型融合**：不是简单调用ChatGPT，而是将课程知识网络与大模型结合，实现有结构的知识推理
-2. **苏格拉底式辅导**：培养自主学习能力，而非被动接受答案
-3. **学研一体**：从课程学习自然过渡到科研探索，打通"学-问-研"闭环
-4. **可视化优先**：知识图谱和文献网络的可视化在答辩展示时极具冲击力
+## 数据存储
+
+所有数据存储在浏览器本地 IndexedDB 中（通过 Dexie.js 管理），包括：
+
+- 工作空间与文件元数据
+- PDF 文件 Blob
+- 页面解析结果
+- AI 对话记录
+- 模型配置
+- 知识图谱节点与边
+- 测验与答题记录
+- 实验项目数据
+
+**无需后端服务器，无需注册账号，数据完全由用户掌控。**
+
+---
 
 ## 适用场景
 
-- 课程复习与知识点梳理
-- 考前薄弱点针对性突破
-- 科研项目选题与文献调研
-- 个性化学习路径规划
+- 📖 课程复习：上传课件 PDF，AI 逐页讲解，追问答疑
+- 🗺️ 知识梳理：自动生成知识图谱，可视化知识关联
+- ✍️ 自测练习：AI 生成测验，闪卡式答题，错题回顾
+- 🔬 实验报告：数据处理、公式计算、自动作图、一键导出
 
-## 演示数据
-
-当前试点课程为《数据结构》，包含：
-- 6大知识类别：基础概念、线性结构、树形结构、图结构、排序算法、查找算法
-- 35个核心知识点
-- 40条知识关联关系
-- 16个教材内容片段（用于RAG检索）
+---
 
 ## 开发团队
 
-天津大学智能感知工程专业
+天津大学精密仪器与光电子工程学院 智能感知工程专业
 
 ---
 
